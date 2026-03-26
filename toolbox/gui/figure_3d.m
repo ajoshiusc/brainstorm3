@@ -125,6 +125,7 @@ function hFig = CreateFigure(FigureId) %#ok<DEFNU>
     setappdata(hFig, 'HeadModelFile', []);
     setappdata(hFig, 'isSelectingCorticalSpot', 0);
     setappdata(hFig, 'isSelectingCoordinates',  0);
+    setappdata(hFig, 'isSelectingCentroid',  0);
     setappdata(hFig, 'hasMoved',    0);
     setappdata(hFig, 'isPlotEditToolbar',   0);
     setappdata(hFig, 'isSensorsOnly', 0);
@@ -254,6 +255,8 @@ end
 
 %% ===== FIGURE CLICK CALLBACK =====
 function FigureClickCallback(hFig, varargin)
+    % Hide jPopupMenu
+    bst_figures('HideJPopupMenu', hFig);
     % Get selected object in this figure
     hObj = get(hFig,'CurrentObject');
     % Find axes
@@ -545,6 +548,7 @@ function FigureMouseUpCallback(hFig, varargin)
     hAxes       = findobj(hFig, '-depth', 1, 'tag', 'Axes3D');
     isSelectingCorticalSpot = getappdata(hFig, 'isSelectingCorticalSpot');
     isSelectingCoordinates  = getappdata(hFig, 'isSelectingCoordinates');
+    isSelectingCentroid     = getappdata(hFig, 'isSelectingCentroid');
     TfInfo = getappdata(hFig, 'Timefreq');
     
     % Remove mouse appdata (to stop movements first)
@@ -595,7 +599,6 @@ function FigureMouseUpCallback(hFig, varargin)
     % Check if clicked object is still available
     if ~isempty(clickObject) && ~ishandle(clickObject)
         clickObject = [];
-        clickAction = [];
     end
     
     % ===== SIMPLE CLICK ===== 
@@ -614,15 +617,9 @@ function FigureMouseUpCallback(hFig, varargin)
             % Selecting from Coordinates or iEEG panels
             if gui_brainstorm('isTabVisible', 'Coordinates') || gui_brainstorm('isTabVisible', 'iEEG')
                 if gui_brainstorm('isTabVisible', 'iEEG')
-                    % For SEEG, making sure centroid calculation for plotting contacts is active
-                    [iTess, TessInfo, hFig, sSurf] = panel_surface('GetSurface', hFig, [], 'Other');
-                    if ~isempty(sSurf)
-                        iIsoSurf = find(cellfun(@(x) ~isempty(regexp(x, '_isosurface', 'match')), {sSurf.FileName}));
-                        if ~isempty(iIsoSurf)
-                            panel_coordinates('SelectPoint', hFig, 0, 1);
-                        else
-                            panel_coordinates('SelectPoint', hFig);
-                        end
+                    % Allow toggle between centroid/surface point selection
+                    if isSelectingCentroid
+                        panel_coordinates('SelectPoint', hFig, 0, 1);
                     else
                         panel_coordinates('SelectPoint', hFig);
                     end
@@ -834,12 +831,16 @@ function FigureMouseUpCallback(hFig, varargin)
                     else
                         bst_figures('ToggleSelectedRow', SelChan);
                     end
-                    % If there are intra electrodes defined, and if the channels are SEEG/ECOG: try to select the electrode in panel_ieeg
-                    if ~isempty(GlobalData.DataSet(iDS).IntraElectrodes) && all(~cellfun(@isempty, {GlobalData.DataSet(iDS).Channel(iSelChan).Group}))
-                        selGroup = unique({GlobalData.DataSet(iDS).Channel(iSelChan).Group});
-                        % Highlight the electrode and contacts
-                        panel_ieeg('SetSelectedElectrodes', selGroup);
+                    % Get current selected channels in the figure
+                    SelChanCur = GetFigSelectedRows(hFig);
+                    % Select intracranial Electrodes and Contacts in iEEG panel
+                    if ~isempty(SelChanCur) && ~isempty(GlobalData.DataSet(iDS).IntraElectrodes) && all(~cellfun(@isempty, {GlobalData.DataSet(iDS).Channel(iSelChan).Group}))
+                        SelGroup = unique({GlobalData.DataSet(iDS).Channel(iSelChan).Group});
+                        panel_ieeg('SetSelectedElectrodes', SelGroup);
                         panel_ieeg('SetSelectedContacts', SelChan);
+                    else
+                        panel_ieeg('SetSelectedContacts', 0);
+                        panel_ieeg('SetSelectedElectrodes', 0);
                     end
                 end
             end
@@ -1223,6 +1224,10 @@ function FigureKeyPressedCallback(hFig, keyEvent)
                     if ismember('control', keyEvent.Modifier)
                         bst_figures('ViewResults', hFig); 
                     end
+                    % For iEEG: Add contact
+                    if gui_brainstorm('isTabVisible', 'iEEG')
+                        panel_ieeg('AddContact');
+                    end
                 % CTRL+T : Default topography
                 case 't'
                     if ismember('control', keyEvent.Modifier) 
@@ -1270,6 +1275,7 @@ function FigureKeyPressedCallback(hFig, keyEvent)
                     end
                 % DELETE: SET CHANNELS AS BAD
                 case {'delete', 'backspace'}
+                    % Set channels as bad
                     isMulti2dLayout = (isfield(GlobalData.DataSet(iDS).Figure(iFig).Handles, 'hLines') && (length(GlobalData.DataSet(iDS).Figure(iFig).Handles.hLines) >= 2));
                     if ~isAlignFig && ~isempty(SelChan) && ~isSensorsOnly && ~isempty(GlobalData.DataSet(iDS).DataFile) && ...
                             (length(GlobalData.DataSet(iDS).Figure(iFig).SelectedChannels) ~= length(iSelChan)) && ~isMulti2dLayout
@@ -1286,6 +1292,10 @@ function FigureKeyPressedCallback(hFig, keyEvent)
                         panel_channel_editor('UpdateChannelFlag', GlobalData.DataSet(iDS).DataFile, newChannelFlag);
                         % Reset selection
                         bst_figures('SetSelectedRows', []);
+                    end
+                    % For iEEG: Remove contacts
+                    if gui_brainstorm('isTabVisible', 'iEEG')
+                        panel_ieeg('RemoveContact');
                     end
                 % ESCAPE: RESET SELECTION
                 case 'escape'
@@ -1515,11 +1525,25 @@ function ApplyViewToAllFigures(hSrcFig, isView, isSurfProp)
         % === COPY SURFACES PROPERTIES ===
         if isSurfProp
             DestTessInfo = getappdata(hDestFig, 'Surface');
+            % Process Source and Destination tess names
+            AllTessInfo = [SrcTessInfo, DestTessInfo];
+            AllTessNames = {AllTessInfo.Name};
+            for iTess = 1 : length(AllTessInfo)
+                % Use 'FEM_layerName' as name for FEM layers
+                if strcmpi(AllTessInfo(iTess).Name, 'FEM')
+                    layerName = regexp(AllTessInfo(iTess).SurfaceFile, '^#.*\((\w*)\)_*\d*$', 'tokens');
+                    if ~isempty(layerName) && ~isempty(layerName{1}) && ~isempty(layerName{1}{1})
+                    AllTessNames{iTess} = ['FEM_' layerName{1}{1}];
+                    end
+                end
+            end
+            SrcTessNames  = AllTessNames(1 : length(SrcTessInfo));
+            DestTessNames = AllTessNames(length(SrcTessInfo)+1 : end);
             % Process each surface of the figure
             for iTess = 1:length(DestTessInfo)
                 % Find surface name in source figure
                 if (length(DestTessInfo) > 1)
-                    iTessInSrc = find(strcmpi(DestTessInfo(iTess).Name, {SrcTessInfo.Name}));
+                    iTessInSrc = find(strcmpi(DestTessNames{iTess}, SrcTessNames));
                 else
                     iTessInSrc = 1;
                 end
@@ -1531,7 +1555,7 @@ function ApplyViewToAllFigures(hSrcFig, isView, isSurfProp)
                     DestTessInfo(iTess).DataAlpha        = SrcTessInfo(iTessInSrc).DataAlpha;
                     DestTessInfo(iTess).SizeThreshold    = SrcTessInfo(iTessInSrc).SizeThreshold;
                     % Copy only if surfaces have the same type                    
-                    if strcmpi(DestTessInfo(iTess).Name, SrcTessInfo(iTessInSrc).Name)
+                    if strcmpi(DestTessNames{iTess}, SrcTessNames{iTessInSrc})
                         DestTessInfo(iTess).SurfShowSulci    = SrcTessInfo(iTessInSrc).SurfShowSulci;
                         DestTessInfo(iTess).SurfShowEdges    = SrcTessInfo(iTessInSrc).SurfShowEdges;
                         DestTessInfo(iTess).AnatomyColor     = SrcTessInfo(iTessInSrc).AnatomyColor;
@@ -1546,7 +1570,7 @@ function ApplyViewToAllFigures(hSrcFig, isView, isSurfProp)
                     % Update surfaces structure
                     setappdata(hDestFig, 'Surface', DestTessInfo);
                     % Update display
-                    if strcmpi(DestTessInfo(iTess).Name, 'Anatomy')
+                    if strcmpi(DestTessNames{iTess}, 'Anatomy')
                         if strcmpi(FigureId.Type, 'MriViewer')
                             figure_mri('UpdateMriDisplay', hDestFig, [], DestTessInfo, iTess);
                         else
@@ -1592,7 +1616,9 @@ function DisplayFigurePopup(hFig)
     else
         TfFile = [];
     end
-
+    % Check if IsoSurface exists in the figure
+    isIsoSurf = any(~cellfun(@isempty, regexp({TessInfo.SurfaceFile}, 'tess_isosurface', 'match')));
+    
     % Create popup menu
     jPopup = java_create('javax.swing.JPopupMenu');
     
@@ -1694,6 +1720,10 @@ function DisplayFigurePopup(hFig)
         jItem.setSelected(TopoLayoutOptions.ShowLegend);
         jItem = gui_component('CheckBoxMenuItem', jMenu, [], 'Flip Y axis', [], [], @(h,ev)figure_topo('SetTopoLayoutOptions', 'FlipYAxis', ~TopoLayoutOptions.FlipYAxis));
         jItem.setSelected(TopoLayoutOptions.FlipYAxis);
+        if ismember(GlobalData.DataSet(iDS).Figure(iFig).Id.Modality, {'EEG', 'MEG', 'NIRS'})
+            jItem = gui_component('CheckBoxMenuItem', jMenu, [], 'Show head lines', [], [], @(h,ev)figure_topo('SetTopoLayoutOptions', 'ShowHeadLines', ~TopoLayoutOptions.ShowHeadLines));
+            jItem.setSelected(TopoLayoutOptions.ShowHeadLines);
+        end
         jPopup.addSeparator();
     end
     
@@ -1806,6 +1836,13 @@ function DisplayFigurePopup(hFig)
             % Configure 3D electrode display
             jMenuChannels.addSeparator();
             gui_component('MenuItem', jMenuChannels, [], 'Configure display', IconLoader.ICON_CHANNEL, [], @(h,ev)SetElectrodesConfig(hFig));
+            % For iEEG: Add/Remove contacts
+            if isequal(Modality, 'SEEG')
+                jItem = gui_component('MenuItem', jMenuChannels, [], 'Add SEEG contact', IconLoader.ICON_PLUS, [], @(h,ev)panel_ieeg('AddContact'));
+                jItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, 0));
+                jItem = gui_component('MenuItem', jMenuChannels, [], 'Remove SEEG contacts', IconLoader.ICON_MINUS, [], @(h,ev)panel_ieeg('RemoveContact'));
+                jItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0));
+            end
         % Other figures
         else
             % Menu "View sensors"
@@ -1998,6 +2035,16 @@ function DisplayFigurePopup(hFig)
         jItem = gui_component('checkboxmenuitem', jPopup, [], 'Get coordinates...', IconLoader.ICON_SCOUT_NEW, [], @GetCoordinates);
         jItem.setSelected(panel_coordinates('GetSelectionState'));
         jItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_P, KeyEvent.CTRL_MASK));
+        % ==== MENU: TOGGLE BETWEEN CENTROID/SURFACE POINT SELECTION ====
+        if gui_brainstorm('isTabVisible', 'iEEG')
+            isSelectingCoordinates = getappdata(hFig, 'isSelectingCoordinates');
+            if isIsoSurf && isSelectingCoordinates
+                jItem = gui_component('checkboxmenuitem', jPopup, [], 'Select surface centroid', [], [], @(h,ev)panel_coordinates('SetCentroidSelection', ev.getSource.isSelected()));
+                isSelectingCentroid = getappdata(hFig, 'isSelectingCentroid');
+                jItem.setSelected(isSelectingCentroid);
+                jPopup.addSeparator();
+            end
+        end
     end
     
     % ==== MENU: SNAPSHOT ====
@@ -3269,8 +3316,8 @@ end
 function SmoothSurface(hFig, iTess, smoothValue)
     % Get surfaces list 
     TessInfo = getappdata(hFig, 'Surface');
-    % Ignore MRI slices
-    if ismember(TessInfo(iTess).Name, {'Anatomy', 'FEM'})
+    % Ignore for MRI slices, FEM tetrahedral mesh and IsoSurface
+    if ismember(TessInfo(iTess).Name, {'Anatomy', 'FEM'}) || ~isempty(regexp(TessInfo(iTess).SurfaceFile, 'tess_isosurface', 'match'))
         return
     end
     % Get surfaces vertices
@@ -3338,9 +3385,10 @@ function SetStructLayout(hFig, iTess)
     dx = max(Vertices(:,1)) - min(Vertices(:,1));
     dy = max(Vertices(:,2)) - min(Vertices(:,2));
     dz = max(Vertices(:,3)) - min(Vertices(:,3));
+    iDel = [];
     % Region by region
     for i = 1:length(sScouts)
-        % Define the structure offset
+        % Define the position offset for anatomical structures
         switch (sScouts(i).Label)
             % Cortex + cerebellum
             case {'lh', '01_Lhemi L', 'Cortex L'},   offSet = [0,  0.6*dy, 0];
@@ -3354,7 +3402,7 @@ function SetStructLayout(hFig, iTess)
             case {'Amygdala L','LAmy','LAmy L'},     offSet = [ .2*dx,  0.3*dy, -0.2*dz];
             case {'Amygdala R','RAmy','RAmy R'},     offSet = [ .2*dx, -0.3*dy, -0.2*dz];
             case {'Pallidum L','LEgp', 'LIgp'},      offSet = [0,  0.2*dy, 0.2*dz];
-            case{ 'Pallidum R','REgp', 'RIgp'},      offSet = [0, -0.2*dy, 0.2*dz];
+            case {'Pallidum R','REgp', 'RIgp'},      offSet = [0, -0.2*dy, 0.2*dz];
             case {'Putamen L','LPut'},               offSet = [0,  0.3*dy, 0];
             case {'Putamen R','RPut'},               offSet = [0, -0.3*dy, 0];
             case {'Caudate L','LCau'},               offSet = [0,  0.3*dy, 0.4*dz];
@@ -3363,13 +3411,27 @@ function SetStructLayout(hFig, iTess)
             case {'Hippocampus R','RHip','RHip R'},  offSet = [ .1*dx, -0.3*dy, -0.4*dz];
             case {'Thalamus L','LTha'},              offSet = [-.3*dx,  0.2*dy, -0.3*dz];
             case {'Thalamus R','RTha'},              offSet = [-.3*dx, -0.2*dy, -0.3*dz];
+            % Outer layers
+            case {'scalp','head'},                   offSet = [0     0     0];
+            case {'outerskull'},                     offSet = [0,  1.5*dy, 0];
+            case {'innerskull'},                     offSet = [0, -1.5*dy, 0];
             otherwise,                               offSet = [];
         end
         % Apply offset to this region
         if ~isempty(offSet)
             iVert = sScouts(i).Vertices;
             Vertices(iVert,:) = bst_bsxfun(@plus, Vertices(iVert,:), offSet);
+            iDel = [iDel, i];
         end
+    end
+    % Define and apply the y-axis offset for non-anatomical structures
+    sScouts(iDel) = [];
+    for i = 1:length(sScouts)
+        iVert = sScouts(i).Vertices;
+        % Alternate -y and +y of the current displayed surfaces
+        dy = max(((-1)^i)* Vertices(:,2)) + (max(Vertices(iVert,2)) - min(Vertices(iVert,2)))/2;
+        offSet = [0, ((-1)^i) * 1.1 * dy, 0];
+        Vertices(iVert,:) = bst_bsxfun(@plus, Vertices(iVert,:), offSet);
     end
     % Apply modified locations
     set(TessInfo(iTess).hPatch, 'Vertices',  Vertices);
@@ -4442,6 +4504,9 @@ function hPairs = PlotNirsCap(hFig, isDetails)
         iChannels = channel_find(GlobalData.DataSet(iDS).Channel, 'NIRS');
     end
     Channels = GlobalData.DataSet(iDS).Channel(iChannels);
+    hasLoc   = cellfun(@(c)size(c,2), {Channels.Loc}) > 0;
+    Channels = Channels(hasLoc);
+
     % Check for errors in the channel definition: Loc needs 2 set of positions (source, detector)
     if any(cellfun(@(c)size(c,2), {Channels.Loc}) ~= 2)
         error('NIRS sensors need to be defined by two positions: the source and and the detector.');
@@ -4800,6 +4865,24 @@ function JumpMaximum(hFig)
     UpdateMriDisplay(hFig, [1 2 3], TessInfo, iAnatomy);
 end
 
+%% ===== GET LOCATION FROM 3D FIGURE =====
+function XYZ = GetLocation(cs, hFig)
+    XYZ = [];
+    CoordinatesSelector = getappdata(hFig, 'CoordinatesSelector');
+    isSelectingCoordinates = getappdata(hFig, 'isSelectingCoordinates');
+    % Exit early if required data is missing or selection is inactive
+    if isempty(CoordinatesSelector) || isempty(CoordinatesSelector.MRI) || ~isSelectingCoordinates
+        return;
+    end
+    % Determine which coordinate set to return based on input
+    keysCs = {'MNI','MRI','SCS','Voxel','World'};
+    iCs = find(strcmpi(cs, keysCs));
+    if isempty(iCs)
+        bst_error(sprintf('Invalid coordinate system: %s', cs), 'Get location (3D)');
+        return;
+    end
+    XYZ = CoordinatesSelector.(keysCs{iCs});
+end
 
 %% ===== SET LOCATION MRI =====
 function SetLocationMri(hFig, cs, XYZ)

@@ -57,22 +57,23 @@ end
 
 %% ===== SELECT FILE =====
 if isempty(EventFile) && isempty(newEvents)
-    % Get raw path
-    [fPath, fBase, fExt] = bst_fileparts(sFile.filename);
     % Get default directories and formats
-    %defFileFormat = upper(sFile.format);
-    % Get default directories and formats
+    LastUsedDirs = bst_get('LastUsedDirs');
     DefaultFormats = bst_get('DefaultFormats');
     % Get file
-    [EventFiles, FileFormat] = java_getfile( 'open', 'Import events...', ...    % Window title
-        fPath, ...                % Default directory
-        'multiple', 'files', ...  % Selection mode
-        bst_get('FileFilters', 'events'), ...
+    [EventFiles, FileFormat] = java_getfile( 'open', ...
+        'Import events...', ...               % Window title
+        LastUsedDirs.ImportEvents, ...        % Default directory
+        'multiple', 'files', ...              % Selection mode
+        bst_get('FileFilters', 'events'), ... % Get all the available file formats
         DefaultFormats.EventsIn);
     % If no file was selected: exit
     if isempty(EventFiles)
         return
     end
+    % Save default import directory
+    LastUsedDirs.ImportEvents = bst_fileparts(EventFiles{1});
+    bst_set('LastUsedDirs', LastUsedDirs);
     % Save default export format
     DefaultFormats.EventsIn = FileFormat;
     bst_set('DefaultFormats',  DefaultFormats);
@@ -250,7 +251,7 @@ for iNew = 1:length(newEvents)
         sFile.events(iEvt).notes      = [sFile.events(iEvt).notes, newEvents(iNew).notes];
         % Sort by time
         if (size(sFile.events(iEvt).times, 2) > 1)
-            [tmp__, iSort] = unique(bst_round(sFile.events(iEvt).times(1,:), 9));
+            [tmp__, iSort] = sort(bst_round(sFile.events(iEvt).times(1,:), 9));
             sFile.events(iEvt).times   = sFile.events(iEvt).times(:,iSort);
             sFile.events(iEvt).epochs  = sFile.events(iEvt).epochs(iSort);
             if ~isempty(sFile.events(iEvt).reactTimes)
@@ -294,6 +295,11 @@ for iNew = 1:length(newEvents)
         end
         sFile.events(iEvt).color = ColorTable(iColor,:);
     end
+end
+
+% Merge simultaneous event occurences
+for iEvt = 1:length(sFile.events)
+    sFile.events(iEvt) = process_evt_merge('MergeOccurrences', sFile.events(iEvt));
 end
 
 % %% ===== SORT EVENTS BY LABEL =====

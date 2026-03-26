@@ -35,7 +35,7 @@ function sProcess = GetDescription() %#ok<DEFNU>
     sProcess.Category    = 'Custom';
     sProcess.SubGroup    = 'Frequency';
     sProcess.Index       = 506;
-    sProcess.Description = 'http://www.fieldtriptoolbox.org/tutorial/timefrequencyanalysis';
+    sProcess.Description = 'https://www.fieldtriptoolbox.org/tutorial/timefrequencyanalysis';
     % Definition of the input accepted by this process
     sProcess.InputTypes  = {'import', 'data'};
     sProcess.OutputTypes = {'import', 'data'};
@@ -132,7 +132,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
         bst_report('Error', sProcess, [], errMsg);
         return;
     end
-    bst_plugin('SetProgressLogo', 'fieldtrip');
+    bst_progress('setpluginlogo', 'fieldtrip');
     % Check for Signal Processing Toolbox when using DPSS
     if iscell(sProcess.options.mt_taper.Value)
         mt_taper = sProcess.options.mt_taper.Value{1};
@@ -146,7 +146,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
     % Call TIME-FREQ process
     OutputFiles = process_timefreq('Run', sProcess, sInputs);
     % Remove logo
-    bst_plugin('SetProgressLogo', []);
+    bst_progress('removeimage');
 end
 
 

@@ -8,7 +8,7 @@ function [ varargout ] = bst_memory( varargin )
 %      [iDS, iResult] = bst_memory('LoadResultsFileFull',  ResultsFile)
 %      [iDS, iDipole] = bst_memory('LoadDipolesFile',      DipolesFile)
 %       [iDS, iTimef] = bst_memory('LoadTimefreqFile',     TimefreqFile)
-%        [sMri, iMri] = bst_memory('LoadMri',              iDS, MriFile);
+%        [sMri, iMri] = bst_memory('LoadMri',              MriFile/iSubject);
 %      [sSurf, iSurf] = bst_memory('LoadSurface',          iSubject, SurfaceType)
 %      [sSurf, iSurf] = bst_memory('LoadSurface',          MriFile,  SurfaceType)
 %      [sSurf, iSurf] = bst_memory('LoadSurface',          SurfaceFile)
@@ -630,8 +630,10 @@ function [iDS, ChannelFile] = LoadDataFile(DataFile, isReloadForced, isTimeCheck
         % Is loaded dataset
         iDS = GetDataSetData(DataFile, 0);
         % Load file
-        if isempty(iDS)
-            bst_progress('start', 'Loading raw file', 'Reading file header...');
+        if isempty(iDS) || isReloadForced
+            if ~isReloadForced
+                bst_progress('start', 'Loading raw file', 'Reading file header...');
+            end
             MeasuresMat = in_bst_data(DataFile, 'F', 'ChannelFlag', 'ColormapType', 'DisplayUnits');
             sFile = MeasuresMat.F;
         else
@@ -687,7 +689,7 @@ function [iDS, ChannelFile] = LoadDataFile(DataFile, isReloadForced, isTimeCheck
             bst_save(file_fullpath(DataFile), DataMat, 'v6', 1);
         end
     else
-        MeasuresMat = in_bst_data(DataFile, 'Time', 'ChannelFlag', 'ColormapType', 'Events', 'DisplayUnits');
+        MeasuresMat = in_bst_data(DataFile, 'Time', 'ChannelFlag', 'ColormapType', 'Events', 'DisplayUnits', 'T0');
         Time = MeasuresMat.Time;
         % Duplicate time if only one time frame
         if (length(Time) == 1)
@@ -700,6 +702,10 @@ function [iDS, ChannelFile] = LoadDataFile(DataFile, isReloadForced, isTimeCheck
             sFile.events = MeasuresMat.Events;
         else
             sFile.events = repmat(db_template('event'), 0);
+        end
+        % Store timestamp for time 0s
+        if isfield(MeasuresMat, 'T0')
+            sFile.t0 = MeasuresMat.T0;
         end
         sFile.format       = 'BST';
         sFile.filename     = DataFile;
@@ -1359,6 +1365,9 @@ function LoadResultsMatrix(iDS, iResult)
     % Duplicate time if only one time frame
     if (size(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp,2) == 1)
         GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp = repmat(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp, [1 2]);
+        if isfield(FileMat, 'Std') && ~isempty(FileMat.Std) && (size(GlobalData.DataSet(iDS).Results(iResult).Std,2) == 1)
+            GlobalData.DataSet(iDS).Results(iResult).Std = repmat(GlobalData.DataSet(iDS).Results(iResult).Std, [1 2]);
+        end
     end
     % Common fields
     GlobalData.DataSet(iDS).Results(iResult).nComponents = FileMat.nComponents;
@@ -1570,6 +1579,11 @@ function [iDS, iTimefreq, iResults] = LoadTimefreqFile(TimefreqFile, isTimeCheck
     if any(TimefreqFile == '$')
         TimefreqFile = TimefreqFile(1:find(TimefreqFile == '$',1)-1);
     end
+    % Is connectivity timefreq?
+    isConnect = 0;
+    if regexp(TimefreqFile, '_connect[n|1]', 'once')
+        isConnect = 1;
+    end
     % Get file information
     [sStudy, iTf, ChannelFile, FileType, sItem] = GetFileInfo(TimefreqFile);
     TimefreqMat = in_bst_timefreq(TimefreqFile, 0, 'DataType');
@@ -1768,7 +1782,7 @@ function [iDS, iTimefreq, iResults] = LoadTimefreqFile(TimefreqFile, isTimeCheck
     % ===== REMOVE NAN =====
     % Replace NaN values with 0, and add them to the mask
     iNan = find(isnan(TimefreqMat.TF));
-    if ~isempty(iNan)
+    if ~isempty(iNan) && ~isConnect
         disp(sprintf('BST> Error: There are %d abnormal NaN values in this file, check the computation process.', length(iNan)));
         TimefreqMat.TF(iNan) = 0;
     end
@@ -2184,17 +2198,35 @@ function [ResultsValues, nComponents, Std] = GetResultsValues(iDS, iResult, iVer
     % ===== GET RESULTS VALUES =====
     % === FULL RESULTS ===
     if ~isempty(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp)
-        % Get ImageGridAmp interesting sub-part
-        if isempty(iRows)
-            ResultsValues = double(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp(:, iTime));
-            if ~isempty(GlobalData.DataSet(iDS).Results(iResult).Std)
-                Std = double(GlobalData.DataSet(iDS).Results(iResult).Std(:, iTime, :, :));
+        % ImageGridAmp = [nSources, nTimes]
+        if isnumeric(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp)
+            % Get ImageGridAmp interesting sub-part
+            if isempty(iRows)
+                ResultsValues = double(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp(:, iTime));
+                if ~isempty(GlobalData.DataSet(iDS).Results(iResult).Std)
+                    Std = double(GlobalData.DataSet(iDS).Results(iResult).Std(:, iTime, :, :));
+                end
+            else
+                ResultsValues = double(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp(iRows, iTime));
+                if ~isempty(GlobalData.DataSet(iDS).Results(iResult).Std)
+                    Std = double(GlobalData.DataSet(iDS).Results(iResult).Std(iRows, iTime, :, :));
+                end
             end
-        else
-            ResultsValues = double(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp(iRows, iTime));
-            if ~isempty(GlobalData.DataSet(iDS).Results(iResult).Std)
-                Std = double(GlobalData.DataSet(iDS).Results(iResult).Std(iRows, iTime, :, :));
+        % ImageGridAmp = {[nSources,a], [a,b], [b, nTimes]}
+        elseif iscell(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp)
+            % Get ImageGridAmp interesting sub-part
+            ResultsValues = GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp;
+            assert(isempty(GlobalData.DataSet(iDS).Results(iResult).Std), 'Storing Std a cell is not supported yet.')
+            ResultsValues{end}   = ResultsValues{end}(:, iTime);
+
+            if ~isempty(iRows)
+                ResultsValues{1} = ResultsValues{1}(iRows, :);
             end
+            
+            % Compute full results
+            ResultsValues = double(bst_multiply_cellmat(ResultsValues));
+            % Std should be empty if ImageGridAmp is a cell
+            Std = [];
         end
     % === KERNEL ONLY ===
     elseif ~isempty(GlobalData.DataSet(iDS).Results(iResult).ImagingKernel)
@@ -2392,6 +2424,8 @@ function [Values, iTimeBands, iRow, nComponents] = GetTimefreqValues(iDS, iTimef
                 end
             elseif ~iscell(RowNames) && ~iscell(AllRows)
                 iFound = find(AllRows == RowNames(i), 1);
+            elseif iscell(RowNames) && ~iscell(AllRows)
+                iFound = find(AllRows == str2double(RowNames{i}), 1);
             else
                 iFound = [];
             end
@@ -2579,13 +2613,29 @@ function DataMinMax = GetResultsMaximum(iDS, iResult) %#ok<DEFNU>
         [maxGFP, iMax] = max(GFP);
         % Get the results values at this particular time point
         sources = GetResultsValues(iDS, iResult, [], iMax);
+        % Store minimum and maximum of displayed data
+        DataMinMax = [min(sources(:)), max(sources(:))];
     % Full results
     else
-        % Get the maximum on the full results matrix
-        sources = GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp;
+        % Get the maximum on the full results matrix (process by time blocks)
+        nSamples = GlobalData.DataSet(iDS).Results(iResult).NumberOfSamples;
+        if isnumeric(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp)
+            nSources = size(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp, 1);
+        elseif iscell(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp)
+            nSources = size(GlobalData.DataSet(iDS).Results(iResult).ImageGridAmp{1}, 1);
+        end
+        ProcessOptions = bst_get('ProcessOptions');
+        MaxSizeDouble = ProcessOptions.MaxBlockSize;
+        blockSize  = max(floor(MaxSizeDouble / nSources), 1);
+        nBlocks    = ceil(nSamples / blockSize);
+        DataMinMax = [Inf, -Inf];
+        for iBlock = 1 : nBlocks
+            iTime = [((iBlock-1) * blockSize + 1) : min(iBlock * blockSize, nSamples)];
+            sources = GetResultsValues(iDS, iResult, [], iTime);
+            DataMinMax(1) = min(DataMinMax(1), min(sources(:)));
+            DataMinMax(2) = max(DataMinMax(2), max(sources(:)));
+        end
     end
-    % Store minimum and maximum of displayed data
-    DataMinMax = [min(sources(:)), max(sources(:))];
 end
 
 
@@ -3460,6 +3510,8 @@ function UnloadSurface(SurfaceFiles, isCloseFig)
         end
         % Save modifications to the surfaces
         panel_scout('SaveModifications');
+        % Save modifications in surface
+        panel_surface('SaveModifications');
         % Check if surface is already loaded
         [sSurf, iSurf] = GetSurface(SurfaceFiles{i});
         % If surface is not loaded: skip

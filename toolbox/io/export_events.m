@@ -62,12 +62,15 @@ if isempty(OutputFile)
     % === Build a default filename ===
     % Get raw path
     if isfield(sFile, 'filename') && ~isempty(sFile.filename)
-        [fPath, fBase, fExt] = bst_fileparts(sFile.filename);
+        [~, fBase, fExt] = bst_fileparts(sFile.filename);
     else
-        fPath = '';
         fBase = 'export';
     end
+    % Generate BIDS event file
+    fBaseBids = regexprep(fBase, '_meg$|_eeg$|_ieeg$', '');
     % Get default directories and formats
+    LastUsedDirs = bst_get('LastUsedDirs');
+    fPath = LastUsedDirs.ExportEvents;
     DefaultFormats = bst_get('DefaultFormats');
     if isempty(DefaultFormats.EventsOut)
         DefaultFormats.EventsOut = 'CTF';
@@ -92,6 +95,8 @@ if isempty(OutputFile)
             OutputFile = bst_fullfile(fPath, [fBase, '.csv']);
         case 'CTFVIDEO'
             OutputFile = bst_fullfile(fPath, 'video_events.txt');
+        case 'BIDS'
+            OutputFile = bst_fullfile(fPath, [fBaseBids, '_events.tsv']);
         otherwise
             OutputFile = bst_fullfile(fPath, [fBase, '.eve']);
     end
@@ -102,11 +107,14 @@ if isempty(OutputFile)
         OutputFile, ...          % Default filename
         'single', 'files', ...   % Selection mode
         bst_get('FileFilters', 'eventsout'), ...
-         DefaultFormats.EventsOut);
+        DefaultFormats.EventsOut);
     % If no file was selected: exit
     if isempty(OutputFile)
         return
     end
+    % Save default import directory
+    LastUsedDirs.ExportEvents = bst_fileparts(OutputFile);
+    bst_set('LastUsedDirs', LastUsedDirs);
     % Save default export format
     DefaultFormats.EventsOut = FileFormat;
     bst_set('DefaultFormats',  DefaultFormats);

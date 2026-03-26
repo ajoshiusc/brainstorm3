@@ -112,7 +112,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
             bst_report('Error', sProcess, [], errMsg);
             return;
         end
-        bst_plugin('SetProgressLogo', 'libsvm');
+        bst_progress('setpluginlogo', 'libsvm');
     end
     % Check for the Signal Processing toolbox
     if LowPass > 0 && ~bst_get('UseSigProcToolbox')
@@ -153,8 +153,8 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
     end
     % Channel files for all inputs  must have the same list of channels
     uniqueChannelFiles = unique({sInputs.ChannelFile});
+    channelMatRef = in_bst_channel(uniqueChannelFiles{1});
     if length(uniqueChannelFiles) > 1
-        channelMatRef = in_bst_channel(uniqueChannelFiles{1});
         channelNamesRef = {channelMatRef.Channel.Name};
         for iChannelFile = 2 : length(uniqueChannelFiles)
             channelMatTest = in_bst_channel(uniqueChannelFiles{iChannelFile});
@@ -239,7 +239,7 @@ function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
     % Register in database
     db_add_data(iStudy, OutputFiles{1}, FileMat);
     % Remove logo
-    bst_plugin('SetProgressLogo', []);
+    bst_progress('removeimage');
 end
 
 

@@ -246,6 +246,10 @@ function [sInputs, sInputs2] = Run(sProcesses, sInputs, sInputs2, isReport)
                     OutputFiles  = {};
                     OutputFiles2 = {};
                 end
+            otherwise
+                bst_report('Error', sProcesses(iProc), sInputAll, sprintf('Unknown process type %s', lower(sProcesses(iProc).Category)));
+                OutputFiles  = {};
+                OutputFiles2 = {};
         end
         % Remove empty filenames
         if iscell(OutputFiles)
@@ -1374,6 +1378,9 @@ function OutputFiles = ProcessStat(sProcess, sInputA, sInputB)
         if isfield(sOutput, 'RowNames') && ~isempty(sOutput.RowNames)
             ExtraMat = rmfield(ExtraMat, 'RowNames');
         end
+        if isfield(sOutput, 'TimeBands') && ~isempty(sOutput.TimeBands)
+            ExtraMat = rmfield(ExtraMat, 'TimeBands');
+        end
         if isfield(sOutput, 'Freqs') && ~isempty(sOutput.Freqs)
             ExtraMat = rmfield(ExtraMat, 'Freqs');
         end
@@ -2300,6 +2307,8 @@ function [OutputFiles, OutputFiles2, sInputs, sInputs2] = CallProcess(sProcess, 
         else
             updateVal = newVal;
         end
+        % Replace string arrays (if any) with char vectors
+        updateVal = bst_str2char(updateVal);
         % Save the finale value
         sProcess.options.(varargin{i}).Value = updateVal;
     end

@@ -1,5 +1,5 @@
-function hFig = view_leadfield_sensitivity(HeadmodelFile, Modality, DisplayMode)
-% VIEW_LEADFIELD_SENTIVITY: Show the leadfield sensitivity on the MRI slices.
+function hFig = view_leadfield_sensitivity(HeadmodelFile, Modality, DisplayMode, Group)
+% VIEW_LEADFIELD_SENTIVITY: Show the leadfield sensitivity
 % 
 % USAGE:  hFig = view_leadfield_sensitivity(HeadmodelFile, Modality, DisplayMode='Mri3D')
 %
@@ -7,6 +7,7 @@ function hFig = view_leadfield_sensitivity(HeadmodelFile, Modality, DisplayMode)
 %    - HeadmodelFile : Relative file path to Brainstorm forward model
 %    - Modality      : {'MEG', 'EEG', 'ECOG', 'SEEG'}
 %    - DisplayMode   : {'Mri3D', 'MriViewer', 'Surface', 'Isosurface'}
+%    - Group         : Use channels of this Group (e.g., NIRS wavelength group). Default = ''
 
 % @=============================================================================
 % This function is part of the Brainstorm software:
@@ -35,6 +36,9 @@ global GlobalData;
 if (nargin < 3) || isempty(DisplayMode)
     DisplayMode = 'Mri3D';
 end
+if (nargin < 4) || isempty(Group)
+    Group = '';
+end
 hFig = [];
 
 % Isosurface display : Requires ISO2MESH
@@ -56,12 +60,22 @@ iModChannels = good_channel(ChannelMat.Channel, [], Modality);
 if isempty(iModChannels)
     error(['No channels "' Modality '" in channel file: ' ChannelFile]);
 end
+% Get channels in group
+if ~isempty(Group)
+    iGroupChannels = find(strcmp({ChannelMat.Channel.Group}, Group));
+    iModChannels   = intersect(iModChannels, iGroupChannels);
+    if isempty(iModChannels)
+        error(['No channels for group "' Group '" in channel file: ' ChannelFile]);
+    end
+end
+
+% Detected modality 
 Channels = ChannelMat.Channel(iModChannels);
-markersLocs = cell2mat(cellfun(@(c)c(:,1), {Channels.Loc}, 'UniformOutput', 0))';
-isMeg = ismember(Modality, {'MEG', 'MEG MAG', 'MEG GRAD'});
+isEeg    = ismember(Modality, {'EEG', 'SEEG', 'ECOG'});
+isNirs   = strcmp(Modality, 'NIRS');
 % Load leadfield matrix
 HeadmodelMat = in_bst_headmodel(HeadmodelFile);
-GainMod = HeadmodelMat.Gain(iModChannels, :);
+GainMod      = HeadmodelMat.Gain(iModChannels, :);
 isVolumeGrid = ismember(HeadmodelMat.HeadModelType, {'volume', 'mixed'});
 % Get subject
 sSubject = bst_get('Subject', sStudy.BrainStormSubject);
@@ -101,6 +115,9 @@ switch (HeadmodelMat.HeadModelType)
     % === SURFACE ===
     case 'surface'
         [hFig, iDS, iFig] = view_surface_data(HeadmodelMat.SurfaceFile, HeadmodelFile, Modality, 'NewFigure', 0);
+        % Get the cortex grid orient: VertNormals
+        sSurf = bst_memory('LoadSurface', HeadmodelMat.SurfaceFile);
+        VertNormals = sSurf.VertNormals;
         is3D = 1;
 end
 if isempty(hFig)
@@ -113,6 +130,12 @@ isAvgRef = 1;
 iRef = [];
 % By default: the target is the first channel available
 iChannel = 1;
+% By default: the sensitivity is the L2 norm over all directions
+directionOfSensitivity = 1;
+directionLabels = {'All directions', 'X direction', 'Y direction', 'Z direction'};
+if strcmpi(HeadmodelMat.HeadModelType, 'surface')
+    directionLabels = [directionLabels, {'Normal direction'}];
+end
 % Isosurface threshold
 Thresh = [];
 % Update figure name
@@ -137,7 +160,7 @@ end
 hLabel = uicontrol('Style', 'text', ...
     'String',              '...', ...
     'Units',               'Pixels', ...
-    'Position',            [6 0 400 38], ...
+    'Position',            [6 0 600 38], ...
     'HorizontalAlignment', 'left', ...
     'FontUnits',           'points', ...
     'FontSize',            bst_get('FigFont'), ...
@@ -153,6 +176,9 @@ switch (Modality)
     case {'EEG', 'SEEG', 'ECOG'}
         ColormapInfo.DisplayUnits = '\muV/nAm';  % ~ 1e3
         dispFactor = 1e-3;
+   case {'NIRS'}
+        ColormapInfo.DisplayUnits = 'mm'; 
+        dispFactor = 1;
 end
 setappdata(hFig, 'Colormap', ColormapInfo);
 % Display SEEG/ECOG electrodes
@@ -168,7 +194,11 @@ end
 % Update display
 UpdateLeadfield();
 % Reset thresholds
-panel_surface('SetDataThreshold', hFig, 1, 0);
+if isNirs
+    panel_surface('SetDataThreshold', hFig, 1, 1/100);
+else
+   panel_surface('SetDataThreshold', hFig, 1, 0);
+end
 panel_surface('SetSizeThreshold', hFig, 1, 1);
 
 
@@ -205,7 +235,7 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
                 end
                 isUpdate = 1;
             case 'downarrow'
-                if ~isMeg
+                if isEeg
                     if isempty(iRef)
                         iRef = length(Channels) + 1;
                     end
@@ -222,7 +252,7 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
                     isUpdate = 1;
                 end
             case 'uparrow'
-                if ~isMeg
+                if isEeg
                     if isempty(iRef)
                         iRef = 0;
                     end
@@ -238,6 +268,12 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
                     end
                     isUpdate = 1;
                 end
+            case 'd'
+                directionOfSensitivity = directionOfSensitivity + 1;
+                if directionOfSensitivity > length(directionLabels)
+                    directionOfSensitivity = 1;
+                end               
+                isUpdate = 1;                     
             case 'i'
                 if strcmpi(DisplayMode, 'isosurface') && SelectThreshold()
                     isUpdate = 1;
@@ -257,29 +293,36 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
                     set (hLabel, 'Visible', 'on');
                 end
             case 'h'
-                if is3D
-                    strHelp3D = [...
-                        '<TR><TD><B>Shift + E</B></TD><TD>Show/hide the sensors labels</TD></TR>' ...
-                        '<TR><TD><B>0 to 9</B></TD><TD>Change view</TD></TR>'];
-                else
-                    strHelp3D = '';
+                % HTML table with help notes
+                strHelpHtml = ['<TR><TD><B>Left arrow</B></TD><TD>Previous target channel (red color)</TD></TR>' ...
+                               '<TR><TD><B>Right arrow</B></TD><TD>Next target channel (red color)</TD></TR>'];
+                if isEeg
+                    strHelpHtml = [strHelpHtml ...
+                               '<TR><TD><B>Up arrow</B></TD><TD>Previous ref channel (green color)</TD></TR>' ...
+                               '<TR><TD><B>Down arrow</B></TD><TD>Next ref channel (green color)</TD></TR>'];
                 end
                 if strcmpi(DisplayMode, 'isosurface')
-                    strIso = '<TR><TD><B>I</B></TD><TD>Select the <B>I</B>sosurface threshold</TD></TR>';
-                else
-                    strIso = [];
+                    strHelpHtml = [strHelpHtml, ...
+                               '<TR><TD><B>I</B></TD><TD>Select the <B>I</B>sosurface threshold</TD></TR>'];
                 end
-                java_dialog('msgbox', ['<HTML><TABLE>' ...
-                    '<TR><TD><B>Left arrow</B></TD><TD>Previous target channel (red color)</TD></TR>' ...
-                    '<TR><TD><B>Right arrow</B></TD><TD>Next target channel (red color)</TD></TR>' ...
-                    '<TR><TD><B>Up arrow</B></TD><TD>Previous ref channel (green color)</TD></TR>' ...
-                    '<TR><TD><B>Down arrow</B></TD><TD>Next ref channel (green color)</TD></TR>' ...
-                    strIso ...
-                    '<TR><TD><B>L</B></TD><TD>Show/hide legend</TD></TR>' ...
-                    '<TR><TD><B>R</B></TD><TD>Select the <B>R</B>eference channel</TD></TR>' ...
-                    '<TR><TD><B>T</B></TD><TD>Select the <B>T</B>arget channel</TD></TR>' ...
-                    strHelp3D ...
-                    '</TABLE>'], 'Keyboard shortcuts');      
+                strHelpHtml = [strHelpHtml, ...
+                               '<TR><TD><B>L</B></TD><TD>Show/hide legend</TD></TR>' ];
+                if isEeg
+                    strHelpHtml = [strHelpHtml, ...
+                               '<TR><TD><B>R</B></TD><TD>Select the <B>R</B>eference channel</TD></TR>'];
+                end
+                strHelpHtml = [strHelpHtml, ...
+                               '<TR><TD><B>T</B></TD><TD>Select the <B>T</B>arget channel</TD></TR>'];
+                if is3D
+                    strHelpHtml = [strHelpHtml, ...
+                               '<TR><TD><B>Shift + E</B></TD><TD>Show/hide the sensors labels</TD></TR>' ...
+                               '<TR><TD><B>0 to 9</B></TD><TD>Change view</TD></TR>'];
+                end
+                dirsStr = strjoin(regexprep(directionLabels, '\s*direction[s]*$', ''), ', ');
+                strHelpHtml = [strHelpHtml, ...
+                    '<TR><TD><B>D</B></TD><TD>Show sensitivity in different <B>D</B>irections: (' dirsStr ')</TD></TR>'];
+
+                java_dialog('msgbox', ['<HTML><TABLE>', strHelpHtml, '</TABLE></HTML>'], 'Keyboard shortcuts', [], 0);
             otherwise
                 KeyPressFcn_bak(hFig, keyEvent); 
                 return;
@@ -312,22 +355,60 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
         bst_progress('start', 'View leadfields', 'Computing sensitivity...');
         % Sum all the channels
         if (iChannel == 0)
-            if isAvgRef
+            if isNirs
+                LeadField = GainMod;
+            elseif isAvgRef
                 LeadField = bst_bsxfun(@minus, GainMod, mean(GainMod,1));
             elseif ~isempty(iRef)
                 LeadField = bst_bsxfun(@minus, GainMod, GainMod(iRef,:));
             end
-            LeadField = reshape(LeadField, size(LeadField,1), 3, []); % each column is a vector
-            normLF = permute(sum(sqrt(LeadField(:,1,:).^2 + LeadField(:,2,:).^2 + LeadField(:,3,:).^2), 1), [3 2 1]);
+            if directionOfSensitivity == 5 % norm of LF in the normal direction
+                if ~isempty(VertNormals)
+                    LeadField = bst_gain_orient(LeadField, VertNormals);
+                    normLF = squeeze(sum(abs(LeadField), 1));
+                else
+                    return;
+                end
+            else
+                LeadField = reshape(LeadField, size(LeadField,1), 3, []); % each column is a vector
+                if directionOfSensitivity == 1 % norm of LF in ALL directions
+                    normLF = permute(sum(sqrt(LeadField(:,1,:).^2 + LeadField(:,2,:).^2 + LeadField(:,3,:).^2), 1), [3 2 1]);
+                elseif  directionOfSensitivity == 2 % norm of LF in X direction
+                    normLF = squeeze(sum(abs(LeadField(:,1,:)), 1));
+                elseif  directionOfSensitivity == 3 % norm of LF in Y direction
+                    normLF = squeeze(sum(abs(LeadField(:,2,:)), 1));
+                elseif  directionOfSensitivity == 4 % norm of LF in Z direction
+                    normLF = squeeze(sum(abs(LeadField(:,3,:)), 1));
+                end
+            end
         % Compute the sensitivity for one sensor
         else
-            if isAvgRef
+            if isNirs
+                LeadField = GainMod(iChannel,:);
+            elseif isAvgRef
                 LeadField = GainMod(iChannel,:) - mean(GainMod,1);
             elseif ~isempty(iRef)
                 LeadField = GainMod(iChannel,:) - GainMod(iRef,:);
             end
-            LeadField = reshape(LeadField,3,[])'; % each column is a vector
-            normLF = sqrt(LeadField(:,1).^2 + LeadField(:,2).^2 + LeadField(:,3).^2);
+            if directionOfSensitivity == 5 % norm of LF in the normal direction
+                if ~isempty(VertNormals)
+                    LeadField = bst_gain_orient(LeadField, VertNormals);
+                    normLF = abs(LeadField);
+                else
+                    normLF = nan(size(LeadField,1),1);
+                end
+            else
+                LeadField = reshape(LeadField,3,[])'; % each column is a vector
+                if directionOfSensitivity == 1 % norm of LF in ALL directions
+                    normLF = sqrt(LeadField(:,1).^2 + LeadField(:,2).^2 + LeadField(:,3).^2);
+                elseif  directionOfSensitivity == 2 % norm of LF in X direction
+                    normLF = abs(LeadField(:,1));
+                elseif  directionOfSensitivity == 3 % norm of LF in Y direction
+                    normLF = abs(LeadField(:,2));
+                elseif  directionOfSensitivity == 4 % norm of LF in Z direction
+                    normLF = abs(LeadField(:,3));
+                end  
+            end
         end
         % Surface or volume
         switch lower(DisplayMode)
@@ -388,10 +469,14 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
     function UpdateLegend()
         if (iChannel == 0)
             strTarget = 'Sum of all channels';
+        elseif isNirs
+            tokens = regexp(Channels(iChannel).Name, '^S([0-9]+)D([0-9]+)(WL\d+|HbO|HbR|HbT)$', 'tokens');
+            strTarget = sprintf('Target channel #%d/%d : S%s (red) D%s (green)', iChannel, length(Channels), tokens{1}{1}, tokens{1}{2});
         else
             strTarget = sprintf('Target channel #%d/%d : %s (red)', iChannel, length(Channels), Channels(iChannel).Name);
         end
-        if isMeg
+        strTarget = [strTarget ' [' directionLabels{directionOfSensitivity} ']'];
+        if ~isEeg
             strTitle = strTarget;
         elseif isAvgRef
             strTitle = [strTarget '  |  Average reference'];
@@ -402,6 +487,9 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
             strTitle = [strTitle, 10 '[Press arrows for next/previous channel (or H for help)]'];
         end
         set(hLabel, 'String', strTitle);
+        % Resize to show all text
+        ext = get(hLabel, 'Extent');
+        set(hLabel, 'Position', ext);
     end
 
 
@@ -409,22 +497,49 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
     function UpdateMarkers()
         % Remove previous selected sensor
         delete(findobj(hAxes, '-depth', 1, 'Tag', 'SelChannel'));
+        delete(findobj(hAxes, '-depth', 1, 'Tag', 'SelSource'));
+        delete(findobj(hAxes, '-depth', 1, 'Tag', 'SelDetector'));
+
         % Plot selected sensor
         if (iChannel > 0)
-            line(Channels(iChannel).Loc(1,1), Channels(iChannel).Loc(2,1), Channels(iChannel).Loc(3,1), ...
-                'Parent',          hAxes, ...
-                'LineWidth',       2, ...
-                'LineStyle',       'none', ...
-                'Marker',          'o', ...
-                'MarkerFaceColor', [1 0 0], ...
-                'MarkerEdgeColor', [.4 .4 .4], ...
-                'MarkerSize',      8, ...
-                'Tag',             'SelChannel');
+            if isNirs
+                % Source
+                line(Channels(iChannel).Loc(1,1), Channels(iChannel).Loc(2,1), Channels(iChannel).Loc(3,1), ...
+                    'Parent',          hAxes, ...
+                    'LineWidth',       2, ...
+                    'LineStyle',       'none', ...
+                    'Marker',          'o', ...
+                    'MarkerFaceColor', [1 0 0], ...
+                    'MarkerEdgeColor', [.4 .4 .4], ...
+                    'MarkerSize',      8, ...
+                    'Tag',             'SelSource');
+                % Detector
+                line(Channels(iChannel).Loc(1,2), Channels(iChannel).Loc(2,2), Channels(iChannel).Loc(3,2), ...
+                    'Parent',          hAxes, ...
+                    'LineWidth',       2, ...
+                    'LineStyle',       'none', ...
+                    'Marker',          'o', ...
+                    'MarkerFaceColor', [0 1 0], ...
+                    'MarkerEdgeColor', [.4 .4 .4], ...
+                    'MarkerSize',      8, ...
+                    'Tag',             'SelDetector');
+            else
+                % Channel
+                line(Channels(iChannel).Loc(1,1), Channels(iChannel).Loc(2,1), Channels(iChannel).Loc(3,1), ...
+                    'Parent',          hAxes, ...
+                    'LineWidth',       2, ...
+                    'LineStyle',       'none', ...
+                    'Marker',          'o', ...
+                    'MarkerFaceColor', [1 0 0], ...
+                    'MarkerEdgeColor', [.4 .4 .4], ...
+                    'MarkerSize',      8, ...
+                    'Tag',             'SelChannel');
+            end
         end
         % Remove previous selected reference
         delete(findobj(hAxes, '-depth', 1, 'Tag', 'RefChannel'));
         % Plot the reference electrode
-        if ~isMeg && ~isAvgRef
+        if isEeg && ~isAvgRef
             line(Channels(iRef).Loc(1,1), Channels(iRef).Loc(2,1), Channels(iRef).Loc(3,1), ...
                 'Parent',          hAxes, ...
                 'LineWidth',       2, ...
@@ -441,7 +556,7 @@ panel_surface('SetSizeThreshold', hFig, 1, 1);
 %% ===== SELECT REFERENCE =====
     function isOk = SelectReference()
         isOk = 0;
-        if ~isMeg
+        if isEeg
             % Ask for the reference electrode
             refChan = java_dialog('combo', '<HTML>Select the reference channel:<BR><BR>', [Modality ' reference'], [], {'Average Ref', Channels.Name});
             if isempty(refChan)

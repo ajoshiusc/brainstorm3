@@ -133,6 +133,7 @@ function bstPanelNew = CreatePanel() %#ok<DEFNU>
         jMenu = gui_component('Menu', jMenuBar, [], 'File', IconLoader.ICON_MENU, [], [], 11);
         if (GlobalData.Program.GuiLevel ~= 2)
             gui_component('MenuItem', jMenu, [], 'Import in database...', IconLoader.ICON_EEG_NEW, [], @(h,ev)bst_call(@ImportInDatabase));
+            gui_component('MenuItem', jMenu, [], 'Import HED tags from file', IconLoader.ICON_EEG_NEW, [], @(h,ev)CallProcessOnRaw('process_evt_importhed'));
             jMenu.addSeparator();
             gui_component('MenuItem', jMenu, [], 'Save modifications',     IconLoader.ICON_SAVE, [], @(h,ev)bst_call(@SaveModifications));
             jMenu.addSeparator();
@@ -143,7 +144,7 @@ function bstPanelNew = CreatePanel() %#ok<DEFNU>
         jMenu.addSeparator();
         gui_component('MenuItem', jMenu, [], 'Export all events',      IconLoader.ICON_SAVE, [], @(h,ev)bst_call(@export_events));
         gui_component('MenuItem', jMenu, [], 'Export selected events', IconLoader.ICON_SAVE, [], @(h,ev)bst_call(@ExportSelectedEvents));
-
+        gui_component('MenuItem', jMenu, [], 'Export HED tags to file',   IconLoader.ICON_SAVE,    [], @(h,ev)CallProcessOnRaw('process_evt_exporthed'));
         % EVENT TYPES
         jMenu = gui_component('Menu', jMenuBar, [], 'Events', IconLoader.ICON_MENU, [], [], 11);
         gui_component('MenuItem', jMenu, [], 'Add group',    IconLoader.ICON_EVT_TYPE_ADD, [], @(h,ev)bst_call(@EventTypeAdd));
@@ -153,6 +154,7 @@ function bstPanelNew = CreatePanel() %#ok<DEFNU>
         jItem = gui_component('MenuItem', jMenu, [], 'Show/hide group', IconLoader.ICON_DISPLAY, [], @(h,ev)CallWithAccelerator(@EventTypeToggleVisible));
         jItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_H, 0));
         gui_component('MenuItem', jMenu, [], 'Mark group as bad/good', IconLoader.ICON_GOODBAD, [], @(h,ev)bst_call(@EventTypeToggleBad));
+        gui_component('MenuItem', jMenu, [], 'Uniform protocol event colors', IconLoader.ICON_COLOR_SELECTION, [], @(h,ev)CallProcessOnRaw('process_evt_uniformcolors'));
         jMenu.addSeparator();
         jMenuSort = gui_component('Menu', jMenu, [], 'Sort groups', IconLoader.ICON_EVT_TYPE, [], []);
             gui_component('MenuItem', jMenuSort, [], 'By name', IconLoader.ICON_EVT_TYPE, [], @(h,ev)bst_call(@(h,ev)EventTypesSort('name')));
@@ -161,12 +163,18 @@ function bstPanelNew = CreatePanel() %#ok<DEFNU>
         gui_component('MenuItem', jMenu, [], 'Duplicate groups', IconLoader.ICON_COPY, [], @(h,ev)bst_call(@EventTypesDuplicate));
         gui_component('MenuItem', jMenu, [], 'Convert to simple event', [], [], @(h,ev)bst_call(@EventConvertToSimple));
         gui_component('MenuItem', jMenu, [], 'Convert to extended event', [], [], @(h,ev)bst_call(@EventConvertToExtended));
+        gui_component('MenuItem', jMenu, [], 'Set channel info', IconLoader.ICON_CHANNEL, [], @(h,ev)CallProcessOnRaw('process_evt_channelinfo'));        
         jMenu.addSeparator();
         gui_component('MenuItem', jMenu, [], 'Combine stim/response', IconLoader.ICON_FUSION, [], @(h,ev)CallProcessOnRaw('process_evt_combine'));
         gui_component('MenuItem', jMenu, [], 'Detect multiple responses', IconLoader.ICON_FUSION, [], @(h,ev)CallProcessOnRaw('process_evt_multiresp'));
         gui_component('MenuItem', jMenu, [], 'Group by name', IconLoader.ICON_FUSION, [], @(h,ev)CallProcessOnRaw('process_evt_groupname'));
         gui_component('MenuItem', jMenu, [], 'Group by time', IconLoader.ICON_FUSION, [], @(h,ev)CallProcessOnRaw('process_evt_grouptime'));
+        gui_component('MenuItem', jMenu, [], 'Merge overlapping extended events', IconLoader.ICON_FUSION, [], @(h,ev)CallProcessOnRaw('process_evt_mergeext'));
         gui_component('MenuItem', jMenu, [], 'Add time offset', IconLoader.ICON_ARROW_RIGHT, [], @(h,ev)CallProcessOnRaw('process_evt_timeoffset'));
+        jMenu.addSeparator();
+        gui_component('MenuItem', jMenu, [], 'Show HED tags', IconLoader.ICON_MATRIX, [], @(h,ev)ShowHedTags);
+        gui_component('MenuItem', jMenu, [], 'Edit HED tags with CTagger', IconLoader.ICON_EDIT, [], @(h,ev)AddHedCtagger);
+        gui_component('MenuItem', jMenu, [], 'Uniform HED tags in protocol', IconLoader.ICON_COPY, [], @(h,ev)CallProcessOnRaw('process_evt_uniformhed'));
         jMenu.addSeparator();
         gui_component('MenuItem', jMenu, [], 'Edit keyboard shortcuts', IconLoader.ICON_KEYBOARD, [], @(h,ev)gui_show('panel_raw_shortcuts', 'JavaWindow', 'Event keyboard shortcuts', [], 1, 0, 0));
         jMenu.addSeparator();
@@ -715,6 +723,11 @@ function UpdateDisplayOptions(hFig)
             DispName = 'Avg Ref';
         elseif strcmpi(TsInfo.MontageName, 'Average reference (L -> R)')
             DispName = 'Avg Ref LR';
+        % Infinity reference (REST)
+        elseif strcmpi(TsInfo.MontageName, 'Infinity reference (REST)')
+            DispName = 'REST Ref';
+        elseif strcmpi(TsInfo.MontageName, 'Infinity reference (REST) (L -> R)')
+            DispName = 'REST Ref LR';
         % Scalp current density
         elseif strcmpi(TsInfo.MontageName, 'Scalp current density')
             DispName = 'SCD';
@@ -1152,7 +1165,9 @@ function ReloadRecordings(isForced)
     % Refresh time panel
     panel_time('UpdatePanel');
     % Reload recordings matrix from raw file
-    bst_memory('LoadRecordingsMatrix', iDS);
+    if ~isempty(GlobalData.DataSet(iDS).DataFile)
+        bst_memory('LoadRecordingsMatrix', iDS);
+    end
     % Replot all figures
     bst_figures('ReloadFigures', [], 1, 1);
     % Flushes the display updates
@@ -1979,46 +1994,10 @@ function EventTypesMerge()
     end
     % Get ALL events (ignore current epoch)
     events = GetEvents([], 1);
-    
-    % Inialize new event group
-    newEvent = events(iEvents(1));
-    newEvent.label    = newLabel;
-    newEvent.times    = [events(iEvents).times];
-    newEvent.epochs   = [events(iEvents).epochs];
-    % Reaction time, notes, channels: only if all the events have them
-    if all(~cellfun(@isempty, {events(iEvents).channels}))
-        newEvent.channels = [events(iEvents).channels];
-    else
-        newEvent.channels = [];
-    end
-    if all(~cellfun(@isempty, {events(iEvents).notes}))
-        newEvent.notes = [events(iEvents).notes];
-    else
-        newEvent.notes = [];
-    end
-    if all(~cellfun(@isempty, {events(iEvents).reactTimes}))
-        newEvent.reactTimes = [events(iEvents).reactTimes];
-    else
-        newEvent.reactTimes = [];
-    end
-    % Sort by samples indices, and remove redundant values
-    [tmp__, iSort] = unique(bst_round(newEvent.times(1,:), 9));
-    newEvent.times    = newEvent.times(:,iSort);
-    newEvent.epochs   = newEvent.epochs(iSort);
-    if ~isempty(newEvent.channels)
-        newEvent.channels = newEvent.channels(iSort);
-    end
-    if ~isempty(newEvent.notes)
-        newEvent.notes = newEvent.notes(iSort);
-    end
-    if ~isempty(newEvent.reactTimes)
-        newEvent.reactTimes = newEvent.reactTimes(iSort);
-    end
-    
-    % Remove merged events
-    events(iEvents) = [];
-    % Add new event
-    events(end + 1) = newEvent;
+
+    % Call process_evt_merge
+    events = process_evt_merge('Compute', '', events, {events(iEvents).label}, newLabel, 1);
+
     % Update dataset
     SetEvents(events);
     % Update events list
@@ -2496,6 +2475,137 @@ function ToggleEvent(eventName, channelNames, isFullPage)
 end
 
 
+%% ===== EVENT ADD HED TAGS =====
+function AddHedCtagger()
+    % Get selected events
+    iEvents = GetSelectedEvents();
+    % Get events (ignore current epoch)
+    sEvents = GetEvents(iEvents, 1);
+    if isempty(sEvents)
+        return
+    end
+    % Event names and HED tags
+    orgEvtNames = {sEvents.label};
+    orgEvtHedTags = {sEvents.hedTags};
+    % Initialize CTagger
+    [isInstalled, errMsg] = bst_plugin('Install', 'ctagger', 1);
+    if ~isInstalled
+        disp(errMsg);
+        return;
+    end
+    % Encode EventNames and EventHedTags as JSON file
+    orgJsonStr = process_evt_exporthed('events2json', orgEvtNames, orgEvtHedTags);
+    % Open CTagger
+    try
+        loader = javaObject('TaggerLoader', orgJsonStr);
+    catch ME
+        error('Error initializing CTagger: %s', ME.message);
+    end
+
+    % CATCH RETURN
+    timeout = 300;  % secs
+    tStart  = tic;
+    notified = 0;
+    while ~notified && toc(tStart) < timeout
+        pause(0.5);
+        notified = loader.isNotified();
+    end
+
+    % Retrieve content of sidecar JSON file from CTagger
+    newJsonStr = char(loader.getHEDJson());
+    bst_plugin('Unload', 'ctagger');
+    if isempty(newJsonStr)
+        return
+    end
+    % Decode JSON file as EventNames and EventHedTags
+    [newEvtNames, newEvtHedTags] = process_evt_importhed('json2events', newJsonStr, 1);
+    if ~isempty(setdiff(newEvtNames, orgEvtNames))
+        % Check for sanitized names
+        cleanOrgEvtNames = matlab.lang.makeValidName(orgEvtNames);
+        if isempty(setdiff(newEvtNames, cleanOrgEvtNames))
+            % Correct imported names
+            [~, ib] = ismember(newEvtNames, cleanOrgEvtNames);
+            newEvtNames = orgEvtNames(ib);
+        else
+            disp('BST> Error: CTagger should not create new events.');
+            return
+        end
+    end
+    % Update HED tags for each event
+    isModified = 0;
+    for iOrg = 1 : length(orgEvtNames)
+        iEvt = strcmp(orgEvtNames{iOrg}, {sEvents.label});
+        iNew = strcmp(orgEvtNames{iOrg}, newEvtNames);
+        % All HED tags were deleted
+        if ~any(iNew)
+            sEvents(iEvt).hedTags = [];
+            isModified = 1;
+        % Added, updated or removed HED tag
+        elseif ~isempty(union(setdiff(newEvtHedTags{iNew}, orgEvtHedTags{iOrg}), setdiff(orgEvtHedTags{iOrg}, newEvtHedTags{iNew})))
+            sEvents(iEvt).hedTags = newEvtHedTags{iNew};
+            isModified = 1;
+        end
+    end
+    % No modifications: return
+    if ~isModified
+        return;
+    end
+    % Update dataset
+    if isempty(iEvents)
+        SetEvents(sEvents);
+    else
+        for i = 1:length(sEvents)
+            SetEvents(sEvents(i), iEvents(i));
+        end
+    end
+    % Save modifications
+    iDS = GetCurrentDataset();
+    SaveModifications(iDS);
+end
+
+
+%% ===== SHOW HED TAGS =====
+function ShowHedTags()
+    % Get selected events
+    iEvents = GetSelectedEvents();
+    % Get events (ignore current epoch)
+    sEvents = GetEvents(iEvents, 1);
+    if isempty(sEvents)
+        return
+    end
+    % Event names and HED tags
+    evtNames = {sEvents.label};
+    evtHedTags = {sEvents.hedTags};
+    % Add headers for table
+    evtNames =   [{'Event label',   '-----------' }, evtNames];
+    evtHedTags = [{{'HED tags'}}, {{'-----------'}} evtHedTags];
+    % Format string
+    maxField = max([cellfun(@length, evtNames)]);
+    evtNames = cellfun(@(x) ['  ', x, ': ', repmat(' ', 1, maxField-length(x))], evtNames, 'UniformOutput', 0);
+    % Remove ':' from headers
+    evtNames{1} = strrep(evtNames{1}, ':', ' ');
+    evtNames{2} = strrep(evtNames{2}, ':', ' ');
+    % Generate text rows
+    allEvtRows = {};
+    for iEvt = 1 : length(evtNames)
+        evtRows = {};
+        evtName = evtNames{iEvt};
+        nTags = length(evtHedTags{iEvt});
+        if nTags == 0
+                evtRows{end+1} = [evtName, ' ', 'No HED tags for this event.'];
+        else
+            for iTag = 1 : nTags
+                evtRows{end+1} = [evtName, ' ', evtHedTags{iEvt}{iTag}];
+                evtName = ['  ', repmat(' ', 1, maxField), '  '];
+            end
+        end
+        allEvtRows = [allEvtRows, evtRows, {''}];
+    end
+    evtHedText = strjoin(allEvtRows, char(10));
+    view_text(evtHedText, 'Events and HED tags');
+end
+
+
 %% ===== IMPORT IN DATABASE =====
 function ImportInDatabase()
     global GlobalData;
@@ -2708,7 +2818,14 @@ function CallProcessOnRaw(ProcessName)
     % Save current modifications
     SaveModifications(iDS);
     % Get filename
-    DataFile = GlobalData.DataSet(iDS).DataFile;
+    if ~isempty(GlobalData.DataSet(iDS).DataFile)
+        DataFile = GlobalData.DataSet(iDS).DataFile;
+    else
+        % Look for open figures
+        for iMat = 1:length(GlobalData.DataSet(iDS).Matrix)
+            DataFile = file_fullpath(GlobalData.DataSet(iDS).Matrix(iMat).FileName);
+        end
+    end
     % File time
     if isRaw
         FileTimeVector = GlobalData.FullTimeWindow.Epochs(GlobalData.FullTimeWindow.CurrentEpoch).Time;
@@ -2993,43 +3110,39 @@ function SetAcquisitionDate(iStudy, newDate) %#ok<DEFNU>
     if isempty(sStudy)
         return;
     end
-    % Parse existing string
-    oldDate = [1900, 1, 1];
+    % Parse existing string dd-MMM-yyyy or YYYY-MM-DDThh:mm:ss
+    oldDate = '01-Jan-1900';
     if ~isempty(sStudy.DateOfStudy)
-        try
-            oldDate = datevec(sStudy.DateOfStudy);
-        catch
+        studyDate = str_date(sStudy.DateOfStudy);
+        if isempty(studyDate)
+            error('Invalid date format. Input must be ''DD-MMM-YYYY'' or ''YYYY-MM-DDThh:mm:ss''');
         end
+        oldDate = studyDate;
     end
     % If new date is not given in argument: ask user
     if isempty(newDate)
+        oldDatetime = datetime(oldDate, 'InputFormat','dd-MMM-yyyy', 'Locale', 'en_US');
+        % Prepare default Date strings
+        oldDateStr = sprintf('%04d-%02d-%02d', oldDatetime.Year,  oldDatetime.Month, oldDatetime.Day);
         % Ask for new date
-        res = java_dialog('input', {'Day:', 'Month:', 'Year:'}, 'Set date', [], {num2str(oldDate(3)), num2str(oldDate(2)), num2str(oldDate(1))});
-        if isempty(res) || (length(res) < 3)
+        res = java_dialog('input', 'Date (YYYY-MM-DD):', 'Acquisition date', [], oldDateStr);
+        if isempty(res)
             return;
         end
-        vecDate = [str2num(res{1}), str2num(res{2}), str2num(res{3})];
-        try
-            if (length(vecDate) < 3) || (vecDate(3) < 1700)
-                error('Invalid year');
-            end
-            % Get a new date string
-            newDate = datetime(sprintf('%02d%02d%04d', vecDate), 'InputFormat', 'ddMMyyyy');
-        catch
-            bst_error('Invalid date.', 'Set date', 0);
-            return;
-        end
+        newDate = str_date(res);
     else
-        % Fix data format
         newDate = str_date(newDate);
-        if isempty(newDate)
-            error('Invalid date format. Input must be ''DD-MMM-YYYY''.');
-        end
     end
+    % Check if newDate was converted to dd-MMM-yyyy in English
+    if isempty(newDate)
+        error('Invalid date format. Input must be ''dd-MMM-yyyy'' (English) or ''yyyy-MM-dd''');
+    end
+
     % If the date didn't change: exit
     if strcmpi(newDate, sStudy.DateOfStudy)
         return;
     end
+
     % Save acquisition data in study file
     StudyFile = file_fullpath(sStudy.FileName);
     StudyMat = load(StudyFile);

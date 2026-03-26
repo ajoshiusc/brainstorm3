@@ -269,6 +269,8 @@ function FigureMouseDownCallback(hFig, ev)
     if isappdata(hFig, 'clickAction') && strcmpi(getappdata(hFig, 'clickAction'), 'MouseDownNotConsumed')
         return;
     end   
+    % Hide jPopupMenu
+    bst_figures('HideJPopupMenu', hFig);
     % click from Matlab figure
     if ~isempty(ev)
         if strcmpi(get(hFig, 'SelectionType'), 'alt') % right-click or CTRL+Click
@@ -1033,8 +1035,10 @@ function [DataPair, isStat] = LoadConnectivityData(hFig, Options)
     end
 
     % Zero-out the diagonal because its useless
-    M = M - diag(diag(M));
-    
+    M(logical(eye(size(M)))) = 0;
+    % Replace NaN values with Inf to test for symmetry
+    ixNan = isnan(M);
+    M(ixNan) = Inf;
     % If the matrix is symetric and Not directional
     if (isequal(M, M') && ~IsDirectionalData(hFig))
         % We don't need the upper half
@@ -1042,6 +1046,8 @@ function [DataPair, isStat] = LoadConnectivityData(hFig, Options)
             M(i, i:end) = 0;
         end
     end
+    % Restore NaNs
+    M(ixNan) = NaN;
     
     % === THRESHOLD ===
     if ~isStat && ((size(M, 1) * size(M, 2)) > MaximumNumberOfData)
@@ -1079,21 +1085,8 @@ function [DataPair, isStat] = LoadConnectivityData(hFig, Options)
     fprintf('%.0f Connectivity measure loaded\n', size(DataPair, 1));
  
     % ===== MATRIX STATISTICS ===== 
-    DataMinMax = [min(DataPair(:, 3)), max(DataPair(:, 3))];
-    if isempty(DataMinMax)
-        DataMinMax = [0 1];
-    elseif (DataMinMax(1) == DataMinMax(2))
-        if (DataMinMax(1) > 0)
-            DataMinMax = [0 DataMinMax(2)];
-        elseif (DataMinMax(2) < 0)
-            DataMinMax = [DataMinMax(1), 0];
-        else
-            DataMinMax = [0 1];
-        end
-    end
     % Update figure variable
-    bst_figures('SetFigureHandleField', hFig, 'DataMinMax', DataMinMax);
-    bst_figures('SetFigureHandleField', hFig, 'DataPair', DataPair);
+    bst_figures('SetFigureHandleField', hFig, 'DataPair',    DataPair);
     bst_figures('SetFigureHandleField', hFig, 'Percentiles', Percentiles);
     % Clear memory
     clear M;
@@ -1131,7 +1124,9 @@ function LoadFigurePlot(hFig) %#ok<DEFNU>
     % Data type
     DataType = GlobalData.DataSet(iDS).Timefreq(iTimefreq).DataType;
     RowNames = GlobalData.DataSet(iDS).Timefreq(iTimefreq).RowNames;
-    
+    % Global [Min,Max]
+    TF = bst_memory('GetTimefreqValues', iDS, iTimefreq, [], [], [], TfInfo.Function);
+    bst_figures('SetFigureHandleField', hFig, 'DataMinMax', [min(TF(:)), max(TF(:))]);
     % ===== GET REGION POSITIONS AND HIERARCHY =====
     % Inialize variables
     sGroups = repmat(struct('Name', [], 'RowNames', [], 'Region', []), 0);
@@ -2445,17 +2440,26 @@ function UpdateColormap(hFig)
     if isempty(iDS)
         return
     end
+    % Get figure method
+    Method = getappdata(hFig, 'Method');
+    % Get DataPair
+    [DataPair, DataMask] = GetPairs(hFig);
+    % Get maximum values
+    DataMinMax = bst_figures('GetFigureHandleField', hFig, 'DataMinMax');
     % Get colormap
     sColormap = bst_colormaps('GetColormap', hFig);
-    % Get DataPair
-    [DataPair, DataMask] = GetPairs(hFig);    
+    % Get figure maximum
+    MinMaxVal = bst_colormaps('GetMinMax', sColormap, DataPair(:, 3), DataMinMax);
+    % Absolute values
     if sColormap.isAbsoluteValues
         DataPair(:, 3) = abs(DataPair(:, 3));
     end
-    % Get figure method
-    Method = getappdata(hFig, 'Method');
-    % Get maximum values
-    DataMinMax = bst_figures('GetFigureHandleField', hFig, 'DataMinMax');
+    % If all the values are the same
+    if any(isnan(MinMaxVal))
+        MinMaxVal = [0 1];
+    elseif ~isempty(MinMaxVal) && (MinMaxVal(1) == MinMaxVal(2))
+        MinMaxVal(2) = MinMaxVal(2) + eps;
+    end
     % Get threshold min/max values
     % ThresholdMinMax = bst_figures('GetFigureHandleField', hFig, 'ThresholdMinMax');
     % === COLORMAP LIMITS ===
@@ -2465,25 +2469,7 @@ function UpdateColormap(hFig)
     else
         UnitsType = 'connect';
     end
-    % Get colormap bounds
-    if strcmpi(sColormap.MaxMode, 'custom')
-        CLim = [sColormap.MinValue, sColormap.MaxValue];
-    elseif ismember(Method, {'granger', 'spgranger', 'plv', 'plvt', 'ciplv', 'ciplvt', 'wpli', 'wplit', 'aec', 'cohere', 'pte', 'henv'})
-        CLim = [DataMinMax(1) DataMinMax(2)];
-    elseif ismember(Method, {'corr'})
-        if strcmpi(sColormap.MaxMode, 'local')
-            CLim = DataMinMax;
-            if sColormap.isAbsoluteValues
-                CLim = [0, abs(CLim(2))];
-            end
-        else
-            if sColormap.isAbsoluteValues
-                CLim = [0, 1];
-            else
-                CLim = [-1, 1];
-            end
-        end
-    end
+    CLim = MinMaxVal;
     setappdata(hFig, 'CLim', CLim);
     
     % === SET COLORMAP ===

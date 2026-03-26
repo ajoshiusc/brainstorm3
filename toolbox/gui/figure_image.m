@@ -202,6 +202,8 @@ end
 %% ===== FIGURE MOUSE DOWN =====
 function FigureMouseDownCallback(hFig, ev)
     global GlobalData;
+    % Hide jPopupMenu
+    bst_figures('HideJPopupMenu', hFig);
     % Get selected object in this figure
     hObj = get(hFig,'CurrentObject');
     if isempty(hObj)
@@ -807,7 +809,7 @@ function UpdateFigurePlot(hFig, isResetMax)
     [FigData, Labels, DimLabels, DataMinMax, ShowLabels, PageName, ShortLabels, HideSelfConnect] = GetFigureData(hFig, isResetMax);
     % Hide self-connect values
     if HideSelfConnect
-        [c, ia, ib] = intersect(Labels{2}, Labels{1}); % intersect(A,B)
+        [c, ia, ib] = intersect(Labels{2}, Labels{1}); % intersect(Rows, Colums)
         for i = 1 : numel(c)
             FigData(ib(i), ia(i)) = NaN;
         end

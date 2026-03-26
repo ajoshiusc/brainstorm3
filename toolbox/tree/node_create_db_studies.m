@@ -164,10 +164,18 @@ for i = 1:length(ProtocolStudies.Study)
 end
 isRaw = find(listRaw);
 isNonRaw = find(~listRaw);
-% Sort studies by Condition (raw first, non-raw after)
-[tmp__, iStudiesSortedRaw] = sort_nat(cellfun(@(c)c{1}, {ProtocolStudies.Study(isRaw).Condition}, 'UniformOutput', 0));
-[tmp__, iStudiesSortedNonRaw] = sort_nat(cellfun(@(c)c{1}, {ProtocolStudies.Study(isNonRaw).Condition}, 'UniformOutput', 0));
-iStudiesSorted = [isRaw(iStudiesSortedRaw), isNonRaw(iStudiesSortedNonRaw)];
+% Get list of noraw "Implantation" conditions
+isImplantation = [];
+if ~isempty(isNonRaw)
+    isImplantation  = strncmpi(cellfun(@(c)c{1}, {ProtocolStudies.Study(isNonRaw).Condition}, 'UniformOutput', 0), 'implantation', 12);
+end
+isNonRawImplant = isNonRaw(isImplantation);
+isNonRaw        = isNonRaw(~isImplantation);
+% Sort studies by Condition (Implantation, Raw, Non-raw after)
+[tmp__, iStudiesSortedImplant] = sort_nat(cellfun(@(c)c{1}, {ProtocolStudies.Study(isNonRawImplant).Condition}, 'UniformOutput', 0));
+[tmp__, iStudiesSortedRaw]     = sort_nat(cellfun(@(c)c{1}, {ProtocolStudies.Study(isRaw).Condition},           'UniformOutput', 0));
+[tmp__, iStudiesSortedNonRaw]  = sort_nat(cellfun(@(c)c{1}, {ProtocolStudies.Study(isNonRaw).Condition},        'UniformOutput', 0));
+iStudiesSorted = [isNonRawImplant(iStudiesSortedImplant), isRaw(iStudiesSortedRaw), isNonRaw(iStudiesSortedNonRaw)];
 % Check for database inconsistency
 if (length(iStudiesSorted) ~= length(ProtocolStudies.Study))
     bst_error(['There are structure errors in this protocol, please reload it.' 10 '=> Right click on protocol node > Reload.'], 'Update database explorer', 0);
@@ -271,8 +279,8 @@ for i = 1:length(ProtocolStudies.Study)
                             intDate = 0;
                             if ~isempty(sStudy.DateOfStudy)
                                 try
-                                    c = datevec(sStudy.DateOfStudy);
-                                    intDate = max(c(1)-1800,0)*13*32 + c(2)*32 + c(3);
+                                    c = datetime(sStudy.DateOfStudy);
+                                    intDate = max(year(c)-1800,0)*13*32 + month(c)*32 + day(c);
                                     if (intDate < 13*32)
                                         intDate = 0;
                                     end

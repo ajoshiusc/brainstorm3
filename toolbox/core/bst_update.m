@@ -46,7 +46,7 @@ end
 
 % === DOWNLOAD NEW VERSION ===
 % Get update zip file
-urlUpdate  = 'http://neuroimage.usc.edu/bst/getupdate.php?c=UbsM09&src=1';
+urlUpdate  = 'https://neuroimage.usc.edu/bst/getupdate.php?c=UbsM09&src=1';
 [installDir, bstDir] = fileparts(fileparts(fileparts(fileparts(mfilename('fullpath')))));
 zipFile    = fullfile(installDir, 'brainstorm_update.zip');
 
@@ -174,9 +174,9 @@ java_setcb(jFrame, 'WindowClosingCallback', @(h,ev)bst_mutex('release', 'Release
 bst_mutex('waitfor', 'ReleaseNotes');
 
 % === RESET ENVIRONMENT ===
-% Delete the brainstorm.jar to force downloading a new one when Brainstorm restarts
+% Delete the brainstorm.jar if outdated to force downloading a new one when Brainstorm restarts
 jarFile = fullfile(installDir, bstDir, 'java', 'brainstorm.jar');
-if exist(jarFile, 'file')
+if exist(jarFile, 'file') && (bst_check_appjar(jarFile) == 0)
     delete(jarFile);
     % The brainstorm.jar file could not be deleted because it was still in use: delete it at next startup
     if exist(jarFile, 'file')

@@ -68,6 +68,13 @@ function Start(varargin) %#ok<DEFNU>
             'headshape',[], ...
             'trans',    []));
     
+    % Update montage struct. ChannelFile is used for Automatic EEG with 3Dscanner (nov 2024)
+    DigitizeOptions = bst_get('DigitizeOptions');
+    if length(DigitizeOptions.Montages) > 1 && ~isfield(DigitizeOptions.Montages, 'ChannelFile')
+        DigitizeOptions.Montages(end).ChannelFile = [];
+        bst_set('DigitizeOptions', DigitizeOptions);
+    end
+
     % ===== PARSE INPUT =====
     DigitizerType = 'Digitize';
     sSubject = [];
@@ -86,15 +93,9 @@ function Start(varargin) %#ok<DEFNU>
         surfaceFile = varargin{4};
     end
     Digitize.Type = DigitizerType;
-    switch DigitizerType
-        case 'Digitize'
-            % Do nothing
-        case '3DScanner'
-            % Simulate
-            SetSimulate(1);
-        otherwise
-            bst_error(sprintf('DigitizerType : "%s" is not supported', DigitizerType));
-            return
+    if ~ismember(DigitizerType, {'Digitize', '3DScanner'})
+        bst_error(sprintf('DigitizerType : "%s" is not supported', DigitizerType));
+        return
     end
 
     % Get Digitize options
@@ -109,6 +110,20 @@ function Start(varargin) %#ok<DEFNU>
         return;
     end
 
+    % Warning for Simulation mode
+    if strcmpi(DigitizerType, 'Digitize') && DigitizeOptions.isSimulate
+        options_dialog = {'Yes', 'No'};
+        res = java_dialog('question', ...
+            ['<HTML>Simulation mode is <B>ON</B><BR>', ...
+            'All incoming data is <B>simulated</B> and <B>not</B> from the actual digitizer device. <BR><BR>' ...
+            'Do you want to turn <B>OFF</B> the Simulation mode?</HTML>'], 'Digitizer', [], ...
+            options_dialog, options_dialog{2});
+        if strcmpi(res, options_dialog{1})
+            SetSimulate(0);
+            bst_call(@panel_digitize, 'Start');
+        end
+    end
+
     % ===== PREPARE DATABASE =====
     % If no protocol: exit
     if (bst_get('iProtocol') <= 0)
@@ -117,17 +132,18 @@ function Start(varargin) %#ok<DEFNU>
     end
     
     % ===== PATIENT ID =====
+    % Get Digitize options
+    DigitizeOptions = bst_get('DigitizeOptions');
     if isempty(sSubject)
-        % Get Digitize options
-        DigitizeOptions = bst_get('DigitizeOptions');
         % Ask for subject id
         PatientId = java_dialog('input', 'Please, enter subject ID:', Digitize.Type, [], DigitizeOptions.PatientId);
         if isempty(PatientId)
             return;
         end
+        % Normalize PatientId (in order to create a directory out of it)
+        PatientId = file_standardize(PatientId);
         % Save the new default patient id
-        DigitizeOptions.PatientId = PatientId;
-        bst_set('DigitizeOptions', DigitizeOptions);
+        DigitizeOptions.PatientId = PatientId;      
     
         % ===== GET SUBJECT =====
         if strcmpi(Digitize.Type, '3DScanner')
@@ -138,8 +154,11 @@ function Start(varargin) %#ok<DEFNU>
     
         [sSubject, iSubject] = bst_get('Subject', SubjectName);
     else
+        DigitizeOptions.PatientId = strrep(sSubject.Name, [Digitize.Type '_'], '');
         SubjectName = sSubject.Name;
     end
+    % Set Digitize options
+    bst_set('DigitizeOptions', DigitizeOptions);
 
     % Save the new SubjectName
     Digitize.SubjectName = SubjectName;
@@ -301,11 +320,11 @@ function [bstPanelNew, panelName] = CreatePanel() %#ok<DEFNU>
     jMenu.addSeparator();
     gui_component('MenuItem', jMenu, [], 'Edit settings...',    IconLoader.ICON_EDIT, [], @(h,ev)bst_call(@EditSettings), []);
     gui_component('MenuItem', jMenu, [], 'Switch to Digitize "2024"', [], [], @(h,ev)bst_call(@SwitchVersion), []);
-    if ~strcmpi(Digitize.Type, '3DScanner')
+    if strcmpi(Digitize.Type, 'Digitize')
         gui_component('MenuItem', jMenu, [], 'Reset serial connection', IconLoader.ICON_FLIP, [], @(h,ev)bst_call(@CreateSerialConnection), []);
     end
     jMenu.addSeparator();
-    if exist('bst_headtracking', 'file') && ~strcmpi(Digitize.Type, '3DScanner')
+    if exist('bst_headtracking', 'file') && strcmpi(Digitize.Type, 'Digitize')
         gui_component('MenuItem', jMenu, [], 'Start head tracking',     IconLoader.ICON_ALIGN_CHANNELS, [], @(h,ev)bst_call(@(h,ev)bst_headtracking([],1,1)), []);
         jMenu.addSeparator();
     end
@@ -421,7 +440,7 @@ function [bstPanelNew, panelName] = CreatePanel() %#ok<DEFNU>
     
     % ===== EXTRA BUTTONS =====
     jPanelMisc = gui_river([5,4], [2,4,4,0]);
-        if ~strcmpi(Digitize.Type, '3DScanner')
+        if strcmpi(Digitize.Type, 'Digitize')
             gui_component('button', jPanelMisc, [], 'Collect point', [], [], @(h,ev)bst_call(@ManualCollect_Callback));
         end
         jButtonDeletePoint = gui_component('button', jPanelMisc, 'hfill', 'Delete last point', [], [], @DeletePoint_Callback);
@@ -859,6 +878,9 @@ function SwitchToNewMode(mode)
                 SetSelectedButton(8);
                 Digitize.Mode = 8;
             end
+            if strcmpi(Digitize.Type, '3DScanner')
+                ctrl.jButtonRandomHeadPts.setEnabled(0);
+            end
         % Shape
         case 8
             ctrl.jButtonExtraStart.setEnabled(1);
@@ -1042,34 +1064,19 @@ function EEGAutoDetectElectrodes(h, ev)
     % Progress bar
     bst_progress('start', Digitize.Type, 'Automatic labelling of EEG sensors...');
     
-    % Get current montage
-    curMontage = GetCurrentMontage();
-    isWhiteCap = 0;
-    % For white caps change the color space by inverting the colors
-    % NOTE: only 'Acticap' is the tested white cap (needs work on finding a better aprrooach)
-    if ~isempty(regexp(curMontage.Name, 'ActiCap', 'match'))
-        isWhiteCap = 1;
-    end
-
     % Get the cap surface from 3D scanner
     hFig = bst_figures('GetCurrentFigure','3D');
     TessInfo = getappdata(hFig, 'Surface');
     sSurf = bst_memory('LoadSurface', TessInfo.SurfaceFile);
     
     % Automatically find electrodes locations on EEG cap
-    [capCenters2d, capImg2d, surface3dscannerUv] = channel_detect_eegcap_auto('FindElectrodesEegCap', sSurf, isWhiteCap);
-    DigitizeOptions = bst_get('DigitizeOptions');
-    if isempty(DigitizeOptions.Montages(DigitizeOptions.iMontage).ChannelFile)
-        bst_error('EEG cap layout not selected. Go to EEG', Digitize.Type, 1);
-        bst_progress('stop');
-        return;
-    else
-        ChannelMat = in_bst_channel(DigitizeOptions.Montages(DigitizeOptions.iMontage).ChannelFile);
-    end
+    [sSurf, capImg2d, capCenters2d, capRadii2d] = channel_detect_eegcap_auto('FindElectrodesEegCap', sSurf);
 
+    % Get current montage
+    curMontage = GetCurrentMontage();
 
     % Warp points from layout to mesh
-    capPoints3d = channel_detect_eegcap_auto('WarpLayout2Mesh', capCenters2d, capImg2d, surface3dscannerUv, ChannelMat.Channel, Digitize.Points);
+    capPoints3d = channel_detect_eegcap_auto('WarpLayout2Digitized', curMontage.ChannelFile, Digitize.Points, sSurf, capImg2d, capCenters2d, capRadii2d);    
     
     % Plot the electrodes and their labels
     for i= 1:size(capPoints3d.EEG, 1)
@@ -1105,8 +1112,8 @@ function ManualCollect_Callback()
 
     % Get Digitize options
     DigitizeOptions = bst_get('DigitizeOptions');
-    % Simulation: call the callback directly
-    if DigitizeOptions.isSimulate
+    % Simulation or 3DScanner: call the callback directly
+    if DigitizeOptions.isSimulate || strcmpi(Digitize.Type, '3DScanner')
         BytesAvailable_Callback([], []);
     % Else: Send a collection request to the Polhemus
     else
@@ -1452,7 +1459,7 @@ function CreateHeadpointsFigure()
         [~, iSubject] = bst_get('Subject', Digitize.SubjectName);
         db_reload_subjects(iSubject);
         % Hide head surface
-        if ~strcmpi(Digitize.Type, '3DScanner')
+        if strcmpi(Digitize.Type, 'Digitize')
             panel_surface('SetSurfaceTransparency', hFig, 1, 0.8);
         end
         % Get Digitizer JFrame
@@ -1511,7 +1518,7 @@ function PlotCoordinate(Loc, Label, Type, iPoint)
     figure_3d('ViewHeadPoints', Digitize.hFig, 1);
     figure_3d('ViewSensors',Digitize.hFig, 1, 1, 0,'EEG');
     % Hide head surface
-    if ~strcmpi(Digitize.Type, '3DScanner')
+    if strcmpi(Digitize.Type, 'Digitize')
         panel_surface('SetSurfaceTransparency', Digitize.hFig, 1, 1);
     end
 end
@@ -1589,7 +1596,7 @@ function CreateMontageMenu(jMenu)
             % Creating montages from EEG cap layout mat files (only for 3DScanner)
             jMenuEegCaps = gui_component('Menu', jMenuAddMontage, [], 'From default EEG cap', IconLoader.ICON_CHANNEL, [], [], []);
             % Use default channel file
-            menu_default_eegcaps(jMenuEegCaps);
+            menu_default_eegcaps(jMenuEegCaps, [], [], 'ICBM152', 0);
     else % if not 3DScanner
         gui_component('MenuItem', jMenu, [], 'Add EEG montage...', [], [], @(h,ev)bst_call(@AddMontage), []);
     end
@@ -1643,7 +1650,7 @@ function autoButtonTooltip = GenerateTooltipTextAuto()
     % Get current montage
     curMontage = GetCurrentMontage();
     % Get cap landmark labels for selected montage
-    eegCapLandmarkLabels = channel_detect_eegcap_auto('GetEegCapLandmarkLabels', curMontage.Name);
+    eegCapLandmarkLabels = channel_detect_eegcap_auto('GetEegCapInfo', curMontage.ChannelFile);
     autoButtonTooltip = 'Auto localization of EEG sensor is not suported for this cap.';
     if ~isempty(eegCapLandmarkLabels)
         strSensors = sprintf('%s, ',eegCapLandmarkLabels{:});
@@ -1680,6 +1687,7 @@ function AddMontage(ChannelFile)
         % Intialize new montage
         newMontage.Name = MontageName;
         newMontage.Labels = {};
+        newMontage.ChannelFile = [];
         
         % Open file
         fid = fopen(MontageFile,'r');
@@ -1713,19 +1721,10 @@ function AddMontage(ChannelFile)
         
         % Intialize new montage
         newMontage.Name = ChannelMat.Comment;
-        newMontage.Labels = {};
+        newMontage.Labels = {ChannelMat.Channel.Name};
         newMontage.ChannelFile = ChannelFile;
-        
-        % Get cap landmark labels
-        eegCapLandmarkLabels = channel_detect_eegcap_auto('GetEegCapLandmarkLabels', newMontage.Name);
-        
-        % Sort as per the initialization landmark labels of EEG Cap  
-        nonLandmarkLabelsIdx = find(~ismember({ChannelMat.Channel.Name},eegCapLandmarkLabels));
-        allLabels = {ChannelMat.Channel.Name};
-        newMontage.Labels = cat(2, eegCapLandmarkLabels, allLabels(nonLandmarkLabelsIdx));
     end
-    
-    
+
     % Get Digitize options
     DigitizeOptions = bst_get('DigitizeOptions');
     % Get existing montage with the same name
@@ -1742,6 +1741,16 @@ function AddMontage(ChannelFile)
     DigitizeOptions.iMontage = iMontage;
     % Save options
     bst_set('DigitizeOptions', DigitizeOptions);
+    % Sort labels: Cap landmarks first
+    eegCapLandmarkLabels = channel_detect_eegcap_auto('GetEegCapInfo', newMontage.ChannelFile);
+    if ~isempty(eegCapLandmarkLabels) && ~isempty(newMontage.Labels)
+        % Sort as per the initialization landmark labels of EEG Cap
+        nonLandmarkLabelsIdx = find(~ismember(newMontage.Labels, eegCapLandmarkLabels));
+        newMontage.Labels = [eegCapLandmarkLabels, newMontage.Labels(nonLandmarkLabelsIdx)];
+        % Save options again (after sorting the labels)
+        DigitizeOptions.Montages(iMontage) = newMontage;
+        bst_set('DigitizeOptions', DigitizeOptions);
+    end    
     % Reload Menu
     CreateMontageMenu();
     if nargin<1
@@ -1875,8 +1884,8 @@ function isOk = CreateSerialConnection(h, ev) %#ok<INUSD>
     while ~isOk
         % Get COM port options
         DigitizeOptions = bst_get('DigitizeOptions');
-        % Simulation: exit
-        if DigitizeOptions.isSimulate
+        % Simulation or 3DScanner: exit
+        if DigitizeOptions.isSimulate || strcmpi(Digitize.Type, '3DScanner')
             isOk = 1;
             return;
         end
@@ -1941,8 +1950,8 @@ function BytesAvailable_Callback(h, ev)
     % Get digitizer options
     DigitizeOptions = bst_get('DigitizeOptions');
 
-    % Simulate: Generate random points
-    if DigitizeOptions.isSimulate
+    % Simulate or 3DScanner: Do not read serial connection
+    if DigitizeOptions.isSimulate || strcmpi(Digitize.Type, '3DScanner')
         if strcmpi(Digitize.Type, '3DScanner')
             % Get current 3D figure
             [hFig,~,iDS] = bst_figures('GetCurrentFigure', '3D');
@@ -1962,6 +1971,7 @@ function BytesAvailable_Callback(h, ev)
             Digitize.hFig = hFig;
             Digitize.iDS = iDS;
         else
+            % Generate points
             switch (Digitize.Mode)
                 case 1,     pointCoord = [.08 0 -.01];
                 case 2,     pointCoord = [-.01 .07 0];
@@ -2020,7 +2030,7 @@ function BytesAvailable_Callback(h, ev)
         sound(Digitize.BeepWav.data, Digitize.BeepWav.fs);
     end
     % Check for change in Mode (click at least 1 meter away from transmitter)
-    if ~strcmpi(Digitize.Type, '3DScanner') && any(abs(pointCoord) > 1.5)
+    if strcmpi(Digitize.Type, 'Digitize') && any(abs(pointCoord) > 1.5)
         newMode = Digitize.Mode +1;
         SwitchToNewMode(newMode);
         return;
@@ -2137,6 +2147,8 @@ function BytesAvailable_Callback(h, ev)
             % Find the index for the current point
             % ADD A CONDITION HERE THAT EDITS EXISTING EEG POINTS
             if Digitize.isEditPts
+                % Reset global variable required for updating
+                Digitize.isEditPts = 0;
                 [~, iSelCoord] = GetSelectedCoord(); 
                 iPoint = iSelCoord - 3;
             else
@@ -2154,19 +2166,14 @@ function BytesAvailable_Callback(h, ev)
             [curMontage, nEEG] = GetCurrentMontage();
             Digitize.Points.Label{iPoint} = curMontage.Labels{iPoint};
             PlotCoordinate(Digitize.Points.EEG(iPoint,:), Digitize.Points.Label{iPoint}, 'EEG', iPoint)
-            
-            if Digitize.isEditPts
-                Digitize.isEditPts = 0;
+            % Update text field counter to the next point in the list
+            nextPoint = max(size(Digitize.Points.EEG,1)+1, 1);
+            if nextPoint > nEEG
+                % All EEG points have been collected, switch to next mode
+                ctrl.jTextFieldEEG.setText(java.lang.String.valueOf(int16(nEEG)));
+                SwitchToNewMode(8);
             else
-                % Update text field counter to the next point in the list
-                nextPoint = max(size(Digitize.Points.EEG,1)+1, 1);
-                if nextPoint > nEEG
-                    % All EEG points have been collected, switch to next mode
-                    ctrl.jTextFieldEEG.setText(java.lang.String.valueOf(int16(nEEG)));
-                    SwitchToNewMode(8);
-                else
-                    ctrl.jTextFieldEEG.setText(java.lang.String.valueOf(int16(nextPoint)));
-                end
+                ctrl.jTextFieldEEG.setText(java.lang.String.valueOf(int16(nextPoint)));
             end
         % === EXTRA ===
         case 8
@@ -2189,7 +2196,7 @@ function BytesAvailable_Callback(h, ev)
     % Enable 'Auto' button IFF all landmark fiducials have been acquired
     if strcmpi(Digitize.Type, '3DScanner') && (Digitize.Mode ~= 8)
         curMontage = GetCurrentMontage();
-        eegCapLandmarkLabels = channel_detect_eegcap_auto('GetEegCapLandmarkLabels', curMontage.Name);
+        eegCapLandmarkLabels = channel_detect_eegcap_auto('GetEegCapInfo', curMontage.ChannelFile);
         if ~isempty(eegCapLandmarkLabels) && ~isempty(Digitize.Points.EEG)
             acqPointLabels = Digitize.Points.Label(1 : size(Digitize.Points.EEG, 1));
             if all(ismember([eegCapLandmarkLabels], acqPointLabels))

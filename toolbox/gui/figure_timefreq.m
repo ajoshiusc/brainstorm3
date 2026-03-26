@@ -240,6 +240,8 @@ end
 %  ===========================================================================
 %% ===== FIGURE MOUSE DOWN =====
 function FigureMouseDownCallback(hFig, ev)
+    % Hide jPopupMenu
+    bst_figures('HideJPopupMenu', hFig);
     % Get selected object in this figure
     hObj = get(hFig,'CurrentObject');
     if isempty(hObj)
@@ -988,7 +990,12 @@ function [Time, Freqs, TfInfo, TF, RowNames, FullTimeVector, DataType, LowFreq, 
             RowNames = RowNames(iSelected);
         end
         if isFooof && isequal(TfInfo.FOOOFDisp, 'overlay')
-            RowNames = {RowNames{1}, 'Background fit', 'Peak fit', 'FOOOF model'};
+            if isnumeric(RowNames)
+                RowNamesTmp = num2str(RowNames);
+            else
+                RowNamesTmp = RowNames{1};
+            end
+            RowNames = {RowNamesTmp, 'Background fit', 'Peak fit', 'FOOOF model'};
         end
         % Show stat clusters
         if strcmpi(file_gettype(TfInfo.FileName), 'ptimefreq')

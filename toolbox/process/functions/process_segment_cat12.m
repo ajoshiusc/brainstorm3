@@ -163,7 +163,7 @@ function [isOk, errMsg] = Compute(iSubject, iAnatomy, nVertices, isInteractive, 
     if ~isInstalled
         return;
     end
-    bst_plugin('SetProgressLogo', 'cat12');
+    bst_progress('setpluginlogo', 'cat12');
     % Check if SPM is in the path
     if ~exist('spm_jobman', 'file')
         errMsg = 'SPM must be in the Matlab path to use this feature.';
@@ -186,7 +186,7 @@ function [isOk, errMsg] = Compute(iSubject, iAnatomy, nVertices, isInteractive, 
             'Please update CAT12.' 10 ...
             ' - Version of CAT installed on this computer: ' num2str(catVer) 10 ...
             ' - Minimum version of CAT supported by Brainstorm: 1728' 10 ...
-            ' - http://www.neuro.uni-jena.de/cat/index.html#DOWNLOAD'];
+            ' - https://www.neuro.uni-jena.de/cat/index.html#DOWNLOAD'];
         return;
     end
     % Check provided TPM.nii
@@ -383,7 +383,7 @@ function [isOk, errMsg] = Compute(iSubject, iAnatomy, nVertices, isInteractive, 
     % Delete temporary folder
     file_delete(TmpDir, 1, 1);
     % Remove logo
-    bst_plugin('SetProgressLogo', []);
+    bst_progress('removeimage');
     % Return success
     isOk = 1;
 end

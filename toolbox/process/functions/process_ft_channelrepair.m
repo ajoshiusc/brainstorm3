@@ -33,7 +33,7 @@ function sProcess = GetDescription() %#ok<DEFNU>
     sProcess.Category    = 'File';
     sProcess.SubGroup    = 'Standardize';
     sProcess.Index       = 309;
-    sProcess.Description = 'http://www.fieldtriptoolbox.org/reference/ft_channelrepair';
+    sProcess.Description = 'https://www.fieldtriptoolbox.org/reference/ft_channelrepair';
     % Definition of the input accepted by this process
     sProcess.InputTypes  = {'data'};
     sProcess.OutputTypes = {'data'};
@@ -76,7 +76,7 @@ function OutputFiles = Run(sProcess, sInput) %#ok<DEFNU>
         bst_report('Error', sProcess, [], errMsg);
         return;
     end
-    bst_plugin('SetProgressLogo', 'fieldtrip');
+    bst_progress('setpluginlogo', 'fieldtrip');
     % Get option values
     MaxDist = sProcess.options.maxdist.Value{1} / 100;   % Convert from centimeters to meters
     SensorTypes = sProcess.options.sensortypes.Value;
@@ -142,7 +142,7 @@ function OutputFiles = Run(sProcess, sInput) %#ok<DEFNU>
     % Register in database
     db_add_data(sInput.iStudy, OutputFiles{1}, DataMat);
     % Remove logo
-    bst_plugin('SetProgressLogo', []);
+    bst_progress('removeimage');
 end
 
 

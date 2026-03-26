@@ -34,6 +34,7 @@ function varargout = bst_figures( varargin )
 %                             bst_figures('ToggleSelectedRow',     RowName)
 %                             bst_figures('FireSelectedRowChanged')
 %       [SelChan, iSelChan] = bst_figures('GetSelectedChannels', iDS)
+%                             bst_figures('HideJPopupMenu, hFig')
 
 % @=============================================================================
 % This function is part of the Brainstorm software:
@@ -409,6 +410,8 @@ function UpdateFigureName(hFig)
                 strMontage = 'All';
             elseif ~isempty(strfind(TsInfo.MontageName, 'Average reference')) || ~isempty(strfind(TsInfo.MontageName, '(local average ref)'))
                 strMontage = 'AvgRef';
+            elseif ~isempty(strfind(TsInfo.MontageName, 'Infinity reference (REST)'))
+                strMontage = 'InfRef';
             elseif ~isempty(strfind(TsInfo.MontageName, 'Scalp current density'))
                 strMontage = 'SCD';
             elseif strcmpi(TsInfo.MontageName, 'Head distance')
@@ -841,7 +844,7 @@ function DeleteFigure(hFigure, varargin)
     end
     
     % Check if surfaces were modified
-    if ~isempty(GlobalData.Surface) && any([GlobalData.Surface.isAtlasModified])
+    if ~isempty(GlobalData.Surface) && any([GlobalData.Surface.isAtlasModified, GlobalData.Surface.isSurfaceModified])
         % Force unload of the anatomy
         isKeepAnatomy = 0;
     end
@@ -895,6 +898,9 @@ function DeleteFigure(hFigure, varargin)
         	panel_dipoles('UpdatePanel');
         end
     end
+
+    % Hide JPopupMenu
+    HideJPopupMenu(hFigure);
 
     % Delete graphic object
     if ishandle(hFigure)
@@ -1356,16 +1362,6 @@ function hNewFig = CloneFigure(hFig)
         % Update sensor markers and labels
         GlobalData.DataSet(iDS).Figure(iNewFig).Handles.hSensorMarkers = findobj(hNewAxes, 'tag', 'SensorMarker');
         GlobalData.DataSet(iDS).Figure(iNewFig).Handles.hSensorLabels  = findobj(hNewAxes, 'tag', 'SensorsLabels');
-        % Topography handles
-        if strcmpi(FigureId.Type, 'Topography')
-            GlobalData.DataSet(iDS).Figure(iNewFig).Handles.hSurf = findobj(hNewAxes, 'tag', get(GlobalData.DataSet(iDS).Figure(iFig).Handles.hSurf, 'Tag'));
-            GlobalData.DataSet(iDS).Figure(iNewFig).Handles.Wmat        = GlobalData.DataSet(iDS).Figure(iFig).Handles.Wmat;
-            GlobalData.DataSet(iDS).Figure(iNewFig).Handles.DataMinMax  = GlobalData.DataSet(iDS).Figure(iFig).Handles.DataMinMax;
-        end
-        % 2DDisc: Set white background
-        if strcmpi(FigureId.Type, 'Topography') && strcmpi(FigureId.SubType, '2DDisc')
-            SetBackgroundColor(hNewFig, [1 1 1]);
-        end
         % Delete scouts
         delete(findobj(hNewAxes, 'Tag', 'ScoutLabel'));
         delete(findobj(hNewAxes, 'Tag', 'ScoutMarker'));
@@ -1392,8 +1388,12 @@ function hNewFig = CloneFigure(hFig)
         end
         % Update Surfaces panel
         panel_surface('UpdatePanel');
-        % Reload figure to apply montage (Topology NIRS)
-        if strcmpi(FigureId.Type, 'Topography') && strcmpi(FigureId.Modality, 'NIRS')
+        % Reload figure
+        if strcmpi(FigureId.Type, 'Topography')
+            % 2DDisc: Set white background
+            if strcmpi(FigureId.SubType, '2DDisc')
+                SetBackgroundColor(hNewFig, [1 1 1]);
+            end
             ReloadFigures(hNewFig, 0);
         end
         
@@ -1705,6 +1705,13 @@ function TogglePlotEditToolbar(hFig)
 end
 
 
+%% ===== HIDE JPOPUPMENU =====
+function HideJPopupMenu(hFig)
+    jPopup = getappdata(hFig, 'jPopupMenu');
+    if ~isempty(jPopup) && isa(jPopup, 'javax.swing.JPopupMenu')
+        jPopup.setVisible(0);
+    end
+end
 
 
 %% ======================================================================

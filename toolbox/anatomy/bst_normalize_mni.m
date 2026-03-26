@@ -77,13 +77,13 @@ isProgress = bst_progress('isVisible');
 if ~isProgress
     bst_progress('start', 'MNI normalization', 'Initialization...');
 end
-bst_plugin('SetProgressLogo', 'spm12');
+bst_progress('setpluginlogo', 'spm12');
 % Get template file
 TpmFile = bst_get('SpmTpmAtlas');
 % If it is not found: download
 if isempty(TpmFile)
     % URL to download
-    tpmUrl = 'http://neuroimage.usc.edu/bst/getupdate.php?t=SPM_TPM';
+    tpmUrl = 'https://neuroimage.usc.edu/bst/getupdate.php?t=SPM_TPM';
     % Path to downloaded file
     tpmZip = bst_fullfile(bst_get('BrainstormUserDir'), 'defaults', 'spm', 'SPM_TPM.zip');
     % Create 'spm' folder if needed
@@ -122,6 +122,9 @@ if isempty(TpmFile)
 end
 % If only installing: exit
 if isInstall
+    if ~isProgress
+        bst_progress('stop');
+    end
     return;
 end
 
@@ -246,7 +249,7 @@ if ~isempty(TpmFiles) && ~isempty(T1File)
 end
 
 % Close progress bar
-bst_plugin('SetProgressLogo', []);
+bst_progress('removeimage');
 if ~isProgress
     bst_progress('stop');
 end

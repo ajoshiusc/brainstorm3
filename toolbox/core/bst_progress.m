@@ -16,7 +16,8 @@ function pBar = bst_progress(varargin)
 %         pBar = bst_progress('removeimage')         : Remove the image from the wait bar
 %         pBar = bst_progress('removelink')          : Remove click-on-image action
 %   pBarParams = bst_progress('getbarparams')        : Get current bar parameters
-%         pBar = bst_progress('setbarparams')        : Set bar parameters
+%         pBar = bst_progress('setbarparams', pBarParams) : Set bar parameters
+%         pBar = bst_progress('setpluginlogo', plugName/plugDesc) : display plugin logo with click-on image link
 
 % NOTES : The window is created once, and then never deleted, just hidden.
 %         Progress bar is represented by a structure: 
@@ -151,6 +152,7 @@ if isempty(pBar)
     pos = [jLoc.getX() + ((jSize.getWidth() - DefaultSize.getWidth()) / 2), ...
            jLoc.getY() + ((jSize.getHeight() - DefaultSize.getHeight()) / 2)];
     pBar.jWindow.setLocation(pos(1), pos(2));
+    pBar.Values = struct('Minimum', [], 'Maximum', [], 'Value', [], 'LastVal', []);
     % Save progress bar
     GlobalData.Program.ProgressBar = pBar;
 end
@@ -187,6 +189,11 @@ switch (lower(commandName))
             pBar.jProgressBar.setMaximum(100);
             % Set initial value to start
             pBar.jProgressBar.setValue(0);
+            % Update values in GlobalData
+            GlobalData.Program.ProgressBar.Values.Minimum = 0;
+            GlobalData.Program.ProgressBar.Values.Maximum = 100;
+            GlobalData.Program.ProgressBar.Values.Value   = 0;
+            GlobalData.Program.ProgressBar.Values.LastVal = 0;
             
         % Call: bst_progress(''start'', title, msg, start, stop)
         elseif ((nargin == 5) && ischar(varargin{2}) && ischar(varargin{3}) && isnumeric(varargin{4}) && isnumeric(varargin{5}))
@@ -210,9 +217,12 @@ switch (lower(commandName))
             % Set progress bar bounds
             pBar.jProgressBar.setMinimum(valStart);
             pBar.jProgressBar.setMaximum(valStop);
-            % Set initial value to start
             pBar.jProgressBar.setValue(valStart);
-            
+            % Update values in GlobalData
+            GlobalData.Program.ProgressBar.Values.Minimum = valStart;
+            GlobalData.Program.ProgressBar.Values.Maximum = valStop;
+            GlobalData.Program.ProgressBar.Values.Value   = valStart;
+            GlobalData.Program.ProgressBar.Values.LastVal = valStart;
         else
             error(['Usage : bst_progress(''start'', title, comment) ' 10 '        bst_progress(''start'', title, comment, valStart, valStop)']);
         end
@@ -222,6 +232,8 @@ switch (lower(commandName))
         pBar.jLabel.setText(msg);
         % Show window
         java_call(pBar.jWindow, 'setVisible', 'Z', 1);
+        % Repaing window
+        pBar.jWindow.getContentPane().repaint();
         % Set watch cursor
         jBstFrame.setCursor(java_create('java.awt.Cursor', 'I', java.awt.Cursor.WAIT_CURSOR));
         
@@ -254,11 +266,19 @@ switch (lower(commandName))
             error('Usage : bst_progress(''inc'', valInc)');
         end
         % Get current value
-        curValue = pBar.jProgressBar.getValue();
-        % Get the incremented progress bar position
-        newVal = min(curValue + valInc, pBar.jProgressBar.getMaximum());
-        pBar.jProgressBar.setValue(newVal);
-        
+        minValue = GlobalData.Program.ProgressBar.Values.Minimum;
+        maxValue = GlobalData.Program.ProgressBar.Values.Maximum;
+        curValue = GlobalData.Program.ProgressBar.Values.Value;
+        newVal = min(curValue + valInc + minValue, maxValue);
+        % Plot the incremented progress if it moves at least 1% of the bar range
+        if (abs(newVal - GlobalData.Program.ProgressBar.Values.LastVal) / (maxValue - minValue)) > 1/100
+            % Get the incremented progress bar position
+            pBar.jProgressBar.setValue(newVal);
+            % Update value in GlobalData
+            GlobalData.Program.ProgressBar.Values.LastVal = newVal;
+        end
+        GlobalData.Program.ProgressBar.Values.Value = newVal;
+
     % ==== SET POSITION ====
     case 'set'
         % Parse arguments
@@ -268,17 +288,20 @@ switch (lower(commandName))
             error('Usage : bst_progress(''set'', pos)');
         end
         % Get current value
-        curValue = pBar.jProgressBar.getValue();
-        % Get the incremented progress bar position
+        curValue = GlobalData.Program.ProgressBar.Values.Value;
+        % Plot the position if it changes
         if (curValue ~= newVal)
-            newVal = min(newVal, pBar.jProgressBar.getMaximum());
+            newVal = min(newVal, GlobalData.Program.ProgressBar.Values.Maximum);
             pBar.jProgressBar.setValue(newVal);
+            % Update value in GlobalData
+            GlobalData.Program.ProgressBar.Values.Value   = newVal;
+            GlobalData.Program.ProgressBar.Values.LastVal = newVal;
         end
         
     % ==== GET POSITION ====
     case 'get'
         % Get the incremented progress bar position
-        pBar = pBar.jProgressBar.getValue();
+        pBar = GlobalData.Program.ProgressBar.Values.Value;
         
     % ==== SET TEXT ====
     case 'text'
@@ -321,8 +344,13 @@ switch (lower(commandName))
     case 'setimage'
         % Get image path
         imagefile = varargin{2};
-        if ~file_exist(imagefile)
-            imagefile = bst_fullfile(bst_get('BrainstormDocDir'), imagefile);
+        searchDirs = {'', bst_get('BrainstormDocDir'), bst_fullfile(bst_get('BrainstormDocDir'), 'plugins')};
+        for iDir = 1 : length(searchDirs)
+            tmp = bst_fullfile(searchDirs{iDir}, imagefile);
+            if file_exist(tmp)
+                imagefile = tmp;
+                break
+            end
         end
         if ~file_exist(imagefile)
             warning(['Image not found: ' imagefile]);
@@ -362,9 +390,9 @@ switch (lower(commandName))
         pBarParams.Title = pBar.jWindow.getTitle().toCharArray';
         pBarParams.Msg = pBar.jLabel.getText().toCharArray';
         pBarParams.isIndeterminate = pBar.jProgressBar.isIndeterminate();
-        pBarParams.Value = pBar.jProgressBar.getValue();
-        pBarParams.Min = pBar.jProgressBar.getMinimum();
-        pBarParams.Max = pBar.jProgressBar.getMaximum();
+        pBarParams.Value = GlobalData.Program.ProgressBar.Values.Value;
+        pBarParams.Min = GlobalData.Program.ProgressBar.Values.Minimum; 
+        pBarParams.Max = GlobalData.Program.ProgressBar.Values.Maximum;
         pBar = pBarParams;
 
     % ==== SET BAR PARAMETERS ====
@@ -381,6 +409,44 @@ switch (lower(commandName))
         else
             bst_progress('start', pBarParams.Title, pBarParams.Msg, pBarParams.Min, pBarParams.Max);
             bst_progress('set', pBarParams.Value);
+        end
+
+    % ==== SET PLUGIN LOGO ====
+    case 'setpluginlogo'
+        % PlugName/PlugDesc is required
+        if (nargin < 2)
+            return
+        else
+            % Get plugin descriptor
+            PlugDesc = varargin{2};
+            if ischar(PlugDesc)
+                PlugDesc = bst_plugin('GetSupported', PlugDesc);
+            end
+            if isempty(PlugDesc)
+                return
+            end
+        end
+        % Get logo if not defined in the plugin structure
+        if isempty(PlugDesc.LogoFile)
+            PlugDesc.LogoFile = bst_plugin('GetLogoFile', PlugDesc);
+        end
+        % Start progress bar if needed
+        if ~pBar.jWindow.isVisible()
+            bst_progress('Start', ['Plugin: ' PlugDesc.Name], '');
+        end
+        % Set logo file
+        if ~isempty(PlugDesc.LogoFile)
+        % Image in label
+            pBar.jImage.setIcon(javax.swing.ImageIcon(PlugDesc.LogoFile));
+            GlobalData.Program.ProgressBar.isImage = 1;
+            % Extend size of the frame
+            UpdateConstraints(1);
+            pBar.jWindow.setPreferredSize([]);
+            pBar.jWindow.pack();
+        end
+        % Set link
+        if ~isempty(PlugDesc.URLinfo)
+            java_setcb(pBar.jImage, 'MouseClickedCallback', @(h,ev)web(PlugDesc.URLinfo, '-browser'));
         end
 
     otherwise

@@ -665,7 +665,11 @@ function [sResults, matSourceValues, matDataValues, fileComment] = LoadFile(sPro
             % FULL RESULTS
             if isfield(sResults, 'ImageGridAmp') && ~isempty(sResults.ImageGridAmp)
                 if nargout > 1
-                    matSourceValues = sResults.ImageGridAmp;
+                    if isnumeric(sResults.ImageGridAmp)
+                        matSourceValues = sResults.ImageGridAmp;
+                    elseif iscell(sResults.ImageGridAmp)
+                        matSourceValues = bst_multiply_cellmat(sResults.ImageGridAmp);
+                    end
                 end
                 % Drop large data field.
                 sResults = rmfield(sResults, 'ImageGridAmp');
@@ -746,6 +750,9 @@ function [sResults, matSourceValues, matDataValues, fileComment] = LoadFile(sPro
     % Add possibly missing fields
     if ~isfield(sResults, 'SurfaceFile')
         sResults.SurfaceFile = [];
+    end
+    if ~isfield(sResults, 'Std')
+        sResults.Std = [];
     end
     if ~isfield(sResults, 'DisplayUnits')
         sResults.DisplayUnits = [];
